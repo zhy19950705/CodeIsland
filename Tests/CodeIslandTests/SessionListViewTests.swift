@@ -1,5 +1,6 @@
 import XCTest
 @testable import CodeIsland
+import CodeIslandCore
 
 final class SessionListViewTests: XCTestCase {
     func testNeedsScrollWhenHeadersAndComposerPushContentPastThreshold() {
@@ -34,6 +35,37 @@ final class SessionListViewTests: XCTestCase {
                 hasComposer: true,
                 maxVisibleSessions: 5,
                 onlySessionId: "done"
+            )
+        )
+    }
+
+    func testUsesCompactRowKeepsRunningSessionsExpanded() {
+        XCTAssertFalse(
+            SessionListView.usesCompactRow(
+                status: .running,
+                sessionId: "running",
+                activeSessionId: "selected",
+                onlySessionId: nil
+            )
+        )
+
+        XCTAssertFalse(
+            SessionListView.usesCompactRow(
+                status: .processing,
+                sessionId: "processing",
+                activeSessionId: "selected",
+                onlySessionId: nil
+            )
+        )
+    }
+
+    func testUsesCompactRowStillCompactsIdleBackgroundSessions() {
+        XCTAssertTrue(
+            SessionListView.usesCompactRow(
+                status: .idle,
+                sessionId: "idle",
+                activeSessionId: "selected",
+                onlySessionId: nil
             )
         )
     }

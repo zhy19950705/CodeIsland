@@ -1,9 +1,39 @@
 import SwiftUI
+import Observation
 import CoreServices
 import os.log
 import CodeIslandCore
 
 private let log = Logger(subsystem: "com.codeisland", category: "AppState")
+
+struct SessionListGroupPresentation: Identifiable {
+    let id: String
+    let header: String
+    let source: String?
+    let ids: [String]
+}
+
+struct SessionListPresentationSnapshot {
+    let groups: [SessionListGroupPresentation]
+    let totalSessionCount: Int
+    let groupHeaderCount: Int
+
+    static let empty = SessionListPresentationSnapshot(
+        groups: [],
+        totalSessionCount: 0,
+        groupHeaderCount: 0
+    )
+}
+
+private struct SessionListCacheKey: Hashable {
+    let groupingMode: String
+    let onlySessionId: String?
+}
+
+private struct CachedSessionListPresentation {
+    let revision: UInt64
+    let snapshot: SessionListPresentationSnapshot
+}
 
 @MainActor
 @Observable
@@ -11,8 +41,17 @@ final class AppState {
     private static let testingSessionPrefix = "preview-"
     private static let historicalSessionsClearedAtKey = "historicalSessionsClearedAt"
 
-    var sessions: [String: SessionSnapshot] = [:]
-    var activeSessionId: String?
+    var sessions: [String: SessionSnapshot] = [:] {
+        didSet {
+            invalidateSessionListPresentationCache()
+        }
+    }
+    var activeSessionId: String? {
+        didSet {
+            guard oldValue != activeSessionId else { return }
+            invalidateSessionListPresentationCache()
+        }
+    }
     var permissionQueue: [PermissionRequest] = []
     var questionQueue: [QuestionRequest] = []
 
@@ -62,6 +101,9 @@ final class AppState {
         return false
     }
     private var modelReadAttempted: Set<String> = []
+    @ObservationIgnored private var sessionListCacheRevision: UInt64 = 0
+    @ObservationIgnored private var cachedSessionListPresentations: [SessionListCacheKey: CachedSessionListPresentation] = [:]
+    private(set) var pendingCompletionReviewSessionIds: Set<String> = []
 
     var rotatingSessionId: String?
     var rotatingSession: SessionSnapshot? {
@@ -301,6 +343,7 @@ final class AppState {
             showNextPending()
         }
         sessions.removeValue(forKey: sessionId)
+        pendingCompletionReviewSessionIds.remove(sessionId)
         stopMonitor(sessionId)
         codexLatestTurnIds.removeValue(forKey: sessionId)
         pendingTerminalIndexSessionIds.remove(sessionId)
@@ -387,6 +430,7 @@ final class AppState {
     }
 
     private func enqueueCompletion(_ sessionId: String) {
+        markPendingCompletionReview(for: sessionId)
         // Don't queue duplicates
         if completionQueue.contains(sessionId) || justCompletedSessionId == sessionId { return }
 
@@ -535,6 +579,7 @@ final class AppState {
         session.toolDescription = nil
         session.addRecentMessage(ChatMessage(isUser: true, text: trimmed))
         sessions[sessionId] = session
+        acknowledgePendingCompletionReview(for: sessionId)
         activeSessionId = sessionId
         if case .collapsed = surface {
             withAnimation(NotchAnimation.open) {
@@ -569,6 +614,7 @@ final class AppState {
     @discardableResult
     func focusSession(sessionId: String) -> Bool {
         guard sessions[sessionId] != nil else { return false }
+        acknowledgePendingCompletionReview(for: sessionId)
         activeSessionId = sessionId
         withAnimation(NotchAnimation.open) {
             surface = .sessionList
@@ -576,6 +622,16 @@ final class AppState {
         startRotationIfNeeded()
         refreshDerivedState()
         return true
+    }
+
+    func jumpToSession(_ sessionId: String) {
+        guard let session = sessions[sessionId] else { return }
+        acknowledgePendingCompletionReview(for: sessionId)
+        SessionJumpRouter.jump(to: session, sessionId: sessionId)
+    }
+
+    func needsCompletionReview(sessionId: String) -> Bool {
+        pendingCompletionReviewSessionIds.contains(sessionId)
     }
 
     @discardableResult
@@ -595,6 +651,191 @@ final class AppState {
 
         guard let match, focusSession(sessionId: match) else { return nil }
         return match
+    }
+
+    func sessionListPresentation(groupingMode: String, onlySessionId: String? = nil) -> SessionListPresentationSnapshot {
+        let key = SessionListCacheKey(groupingMode: groupingMode, onlySessionId: onlySessionId)
+        if let cached = cachedSessionListPresentations[key],
+           cached.revision == sessionListCacheRevision {
+            return cached.snapshot
+        }
+
+        let snapshot = buildSessionListPresentation(groupingMode: groupingMode, onlySessionId: onlySessionId)
+        cachedSessionListPresentations[key] = CachedSessionListPresentation(
+            revision: sessionListCacheRevision,
+            snapshot: snapshot
+        )
+        return snapshot
+    }
+
+    private func buildSessionListPresentation(groupingMode: String, onlySessionId: String?) -> SessionListPresentationSnapshot {
+        if let onlySessionId {
+            guard sessions[onlySessionId] != nil else { return .empty }
+            return SessionListPresentationSnapshot(
+                groups: [
+                    SessionListGroupPresentation(
+                        id: "session-only-\(onlySessionId)",
+                        header: "",
+                        source: nil,
+                        ids: [onlySessionId]
+                    )
+                ],
+                totalSessionCount: 1,
+                groupHeaderCount: 0
+            )
+        }
+
+        let allIds = Array(sessions.keys)
+        let groups: [SessionListGroupPresentation]
+
+        switch groupingMode {
+        case "project":
+            var projectGroups: [String: [String]] = [:]
+            for id in allIds {
+                let project = sessions[id]?.displayName ?? "Session"
+                projectGroups[project, default: []].append(id)
+            }
+
+            let sortedProjects = projectGroups.keys.sorted { lhs, rhs in
+                latestActivity(for: projectGroups[lhs] ?? []) > latestActivity(for: projectGroups[rhs] ?? [])
+            }
+
+            groups = sortedProjects.enumerated().map { index, project in
+                let ids = sortedSessionIDsByActivity(projectGroups[project] ?? [])
+                return SessionListGroupPresentation(
+                    id: "project-\(index)-\(project)",
+                    header: "\(project) (\(ids.count))",
+                    source: nil,
+                    ids: ids
+                )
+            }
+
+        case "status":
+            let l10n = L10n.shared
+            let statusGroups: [(Set<AgentStatus>, String)] = [
+                ([.running], l10n["status_running"]),
+                ([.waitingApproval, .waitingQuestion], l10n["status_waiting"]),
+                ([.processing], l10n["status_processing"]),
+                ([.idle], l10n["status_idle"]),
+            ]
+
+            groups = statusGroups.enumerated().compactMap { index, item in
+                let (statuses, label) = item
+                let ids = sortedSessionIDsByActivity(allIds.filter { id in
+                    guard let session = sessions[id] else { return false }
+                    return statuses.contains(session.status)
+                })
+                guard !ids.isEmpty else { return nil }
+                return SessionListGroupPresentation(
+                    id: "status-\(index)-\(label)",
+                    header: "\(label) (\(ids.count))",
+                    source: nil,
+                    ids: ids
+                )
+            }
+
+        case "cli":
+            let cliOrder: [(source: String, name: String)] = [
+                ("claude", "Claude"),
+                ("codex", "Codex"),
+                ("gemini", "Gemini"),
+                ("cursor", "Cursor"),
+                ("copilot", "Copilot"),
+                ("qoder", "Qoder"),
+                ("droid", "Factory"),
+                ("codebuddy", "CodeBuddy"),
+                ("opencode", "OpenCode"),
+            ]
+
+            var result: [SessionListGroupPresentation] = []
+            var seen = Set<String>()
+
+            for (index, cli) in cliOrder.enumerated() {
+                let ids = sortedSessionIDsByActivity(allIds.filter { id in
+                    sessions[id]?.source == cli.source
+                })
+                guard !ids.isEmpty else { continue }
+                ids.forEach { seen.insert($0) }
+                result.append(
+                    SessionListGroupPresentation(
+                        id: "cli-\(index)-\(cli.source)",
+                        header: "\(cli.name) (\(ids.count))",
+                        source: cli.source,
+                        ids: ids
+                    )
+                )
+            }
+
+            let remaining = sortedSessionIDsByActivity(allIds.filter { !seen.contains($0) })
+            if !remaining.isEmpty {
+                result.append(
+                    SessionListGroupPresentation(
+                        id: "cli-other",
+                        header: "\(L10n.shared["other"]) (\(remaining.count))",
+                        source: nil,
+                        ids: remaining
+                    )
+                )
+            }
+            groups = result
+
+        default:
+            let sorted = sortedSessionIDsByActivity(allIds)
+            groups = [
+                SessionListGroupPresentation(
+                    id: "all",
+                    header: "",
+                    source: nil,
+                    ids: sorted
+                )
+            ]
+        }
+
+        let totalSessionCount = groups.reduce(0) { partial, group in
+            partial + group.ids.count
+        }
+        let groupHeaderCount = groups.reduce(0) { partial, group in
+            partial + (group.header.isEmpty ? 0 : 1)
+        }
+
+        return SessionListPresentationSnapshot(
+            groups: groups,
+            totalSessionCount: totalSessionCount,
+            groupHeaderCount: groupHeaderCount
+        )
+    }
+
+    private func sortedSessionIDsByActivity(_ ids: [String]) -> [String] {
+        ids.sorted { lhs, rhs in
+            guard let left = sessions[lhs], let right = sessions[rhs] else { return lhs < rhs }
+
+            let leftNeedsAttention = left.status == .waitingApproval || left.status == .waitingQuestion
+            let rightNeedsAttention = right.status == .waitingApproval || right.status == .waitingQuestion
+            if leftNeedsAttention != rightNeedsAttention {
+                return leftNeedsAttention
+            }
+
+            let leftIsActiveSession = lhs == activeSessionId
+            let rightIsActiveSession = rhs == activeSessionId
+            if leftIsActiveSession != rightIsActiveSession {
+                return leftIsActiveSession
+            }
+
+            let leftActive = left.status != .idle
+            let rightActive = right.status != .idle
+            if leftActive != rightActive {
+                return leftActive
+            }
+
+            if left.lastActivity != right.lastActivity {
+                return left.lastActivity > right.lastActivity
+            }
+            return lhs < rhs
+        }
+    }
+
+    private func latestActivity(for ids: [String]) -> Date {
+        ids.compactMap { sessions[$0]?.lastActivity }.max() ?? .distantPast
     }
 
     /// Recompute cached status/source/counts from sessions in a single O(n) pass.
@@ -622,6 +863,11 @@ final class AppState {
         if didChange {
             notifyPanelStateChanged()
         }
+    }
+
+    private func invalidateSessionListPresentationCache() {
+        sessionListCacheRevision &+= 1
+        cachedSessionListPresentations.removeAll(keepingCapacity: true)
     }
 
     private func notifyPanelStateChanged() {
@@ -680,6 +926,7 @@ final class AppState {
         previewQuestionPayload = nil
         previewApprovalPayload = nil
         completionQueue.removeAll { $0.hasPrefix(Self.testingSessionPrefix) }
+        pendingCompletionReviewSessionIds = pendingCompletionReviewSessionIds.filter { !$0.hasPrefix(Self.testingSessionPrefix) }
 
         if let activeSessionId, activeSessionId.hasPrefix(Self.testingSessionPrefix) {
             self.activeSessionId = mostActiveSessionId()
@@ -710,6 +957,7 @@ final class AppState {
         previewQuestionPayload = nil
         previewApprovalPayload = nil
         sessions.removeAll()
+        pendingCompletionReviewSessionIds.removeAll()
         activeSessionId = nil
         rotatingSessionId = nil
         surface = .collapsed
@@ -947,6 +1195,11 @@ final class AppState {
         let wasWaiting = prevStatus == .waitingApproval || prevStatus == .waitingQuestion
 
         let effects = reduceEvent(sessions: &sessions, event: event, maxHistory: maxHistory)
+        let normalizedEventName = EventNormalizer.normalize(event.eventName)
+
+        if normalizedEventName != "Stop" {
+            acknowledgePendingCompletionReview(for: sessionId)
+        }
 
         // Model transcript read: done AFTER reduceEvent so extractMetadata has filled in cwd
         if sessions[sessionId]?.model == nil && !modelReadAttempted.contains(sessionId) {
@@ -959,7 +1212,7 @@ final class AppState {
         // If session was waiting but received an activity event, the question/permission
         // was answered externally (e.g. user replied in terminal). Clear pending items.
         if wasWaiting {
-            let en = EventNormalizer.normalize(event.eventName)
+            let en = normalizedEventName
             // Events that should NOT clear waiting state
             let keepWaiting: Set<String> = ["Notification", "SessionStart", "SessionEnd", "PreCompact"]
             if !keepWaiting.contains(en) {
@@ -1001,8 +1254,7 @@ final class AppState {
         // Handle the "else if activeSessionId == sessionId → mostActive" edge case
         // (reducer can't check activeSessionId since it's AppState-local)
         if sessions[sessionId]?.status == .idle && activeSessionId == sessionId {
-            let eventName = EventNormalizer.normalize(event.eventName)
-            if eventName != "Stop" {
+            if normalizedEventName != "Stop" {
                 activeSessionId = mostActiveSessionId()
             }
         }
@@ -1029,6 +1281,15 @@ final class AppState {
         case .setActiveSession(let sid):
             activeSessionId = sid
         }
+    }
+
+    private func markPendingCompletionReview(for sessionId: String) {
+        guard sessions[sessionId] != nil else { return }
+        pendingCompletionReviewSessionIds.insert(sessionId)
+    }
+
+    private func acknowledgePendingCompletionReview(for sessionId: String) {
+        pendingCompletionReviewSessionIds.remove(sessionId)
     }
 
     func handlePermissionRequest(_ event: HookEvent, continuation: CheckedContinuation<Data, Never>) {
@@ -1494,7 +1755,9 @@ final class AppState {
             activeSessionId = sessions.first(where: { $0.value.status != .idle })?.key
                 ?? sessions.keys.sorted().first
         }
-        refreshDerivedState()
+        // Run one cleanup pass immediately after restoring startup state so stale
+        // sessions do not linger until the first 60s timer tick.
+        cleanupIdleSessions()
     }
 
     func startSessionDiscovery() {

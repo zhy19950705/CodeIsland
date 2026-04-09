@@ -19,6 +19,7 @@ struct MascotView: View {
     let source: String
     let status: AgentStatus
     var size: CGFloat = 27
+    var animated = true
     @AppStorage(SettingsKey.mascotSpeed) private var speedPct = SettingsDefaults.mascotSpeed
     @AppStorage(SettingsKey.mascotOverridesVersion) private var overridesVersion = 0
 
@@ -27,23 +28,23 @@ struct MascotView: View {
         Group {
             switch mascotSource {
             case "codex":
-                DexView(status: status, size: size)
+                DexView(status: status, size: size, animated: animated)
             case "gemini":
-                GeminiView(status: status, size: size)
+                GeminiView(status: status, size: size, animated: animated)
             case "cursor":
-                CursorView(status: status, size: size)
+                CursorView(status: status, size: size, animated: animated)
             case "copilot":
-                CopilotView(status: status, size: size)
+                CopilotView(status: status, size: size, animated: animated)
             case "qoder":
-                QoderView(status: status, size: size)
+                QoderView(status: status, size: size, animated: animated)
             case "droid":
-                DroidView(status: status, size: size)
+                DroidView(status: status, size: size, animated: animated)
             case "codebuddy":
-                BuddyView(status: status, size: size)
+                BuddyView(status: status, size: size, animated: animated)
             case "opencode":
-                OpenCodeView(status: status, size: size)
+                OpenCodeView(status: status, size: size, animated: animated)
             default:
-                ClawdView(status: status, size: size)
+                ClawdView(status: status, size: size, animated: animated)
             }
         }
         .environment(\.mascotSpeed, Double(speedPct) / 100.0)

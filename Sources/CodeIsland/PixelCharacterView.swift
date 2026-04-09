@@ -6,6 +6,7 @@ import CodeIslandCore
 struct ClawdView: View {
     let status: AgentStatus
     var size: CGFloat = 27
+    var animated = true
     @State private var alive = false
     @Environment(\.mascotSpeed) private var speed
 
@@ -18,11 +19,17 @@ struct ClawdView: View {
     private static let kbHi   = Color.white                                 // bright flash
 
     var body: some View {
-        ZStack {
-            switch status {
-            case .idle:                 sleepScene
-            case .processing, .running: workScene
-            case .waitingApproval, .waitingQuestion: alertScene
+        Group {
+            if animated {
+                ZStack {
+                    switch status {
+                    case .idle:                 sleepScene
+                    case .processing, .running: workScene
+                    case .waitingApproval, .waitingQuestion: alertScene
+                    }
+                }
+            } else {
+                staticScene
             }
         }
         .frame(width: size, height: size)
@@ -31,6 +38,18 @@ struct ClawdView: View {
         .onChange(of: status) {
             alive = false
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { alive = true }
+        }
+    }
+
+    @ViewBuilder
+    private var staticScene: some View {
+        switch status {
+        case .idle:
+            sleepCanvas(t: 0)
+        case .processing, .running:
+            workCanvas(t: 0)
+        case .waitingApproval, .waitingQuestion:
+            alertCanvas(t: 0)
         }
     }
 

@@ -35,15 +35,17 @@ struct NotchPanelView: View {
     private var shouldShowExpanded: Bool {
         showBar && appState.surface.isExpanded
     }
-    private var compactUsageSource: UsageProviderSource? {
-        let sessionId = appState.rotatingSessionId ?? appState.activeSessionId ?? appState.sessions.keys.sorted().first
-        let source = sessionId.flatMap { appState.sessions[$0]?.source } ?? appState.primarySource
-        guard source == UsageProviderSource.codex.rawValue else { return nil }
-        return .codex
+    private var compactUsageProvider: UsageProviderSnapshot? {
+        Self.compactUsageProvider(
+            from: appState.usageSnapshot,
+            sessions: appState.sessions,
+            rotatingSessionId: appState.rotatingSessionId,
+            activeSessionId: appState.activeSessionId,
+            primarySource: appState.primarySource
+        )
     }
     private var showCompactUsageBadge: Bool {
-        guard !shouldShowExpanded, let source = compactUsageSource else { return false }
-        return appState.usageSnapshot.providers.contains(where: { $0.source == source })
+        !shouldShowExpanded && compactUsageProvider != nil
     }
 
     /// Mascot size — fits within the menu bar height
@@ -273,6 +275,21 @@ struct NotchPanelView: View {
     }
 }
 
+extension NotchPanelView {
+    static func compactUsageProvider(
+        from snapshot: UsageSnapshot,
+        sessions: [String: SessionSnapshot],
+        rotatingSessionId: String?,
+        activeSessionId: String?,
+        primarySource: String
+    ) -> UsageProviderSnapshot? {
+        let sessionId = rotatingSessionId ?? activeSessionId ?? sessions.keys.sorted().first
+        let source = sessionId.flatMap { sessions[$0]?.source } ?? primarySource
+        guard let usageSource = UsageProviderSource(rawValue: source) else { return nil }
+        return snapshot.providers.first(where: { $0.source == usageSource })
+    }
+}
+
 
 // MARK: - Compact Wings (notch-level, 32px height)
 
@@ -384,9 +401,14 @@ private struct CompactRightWing: View {
         guard let sid = displaySessionId else { return appState.primarySource }
         return appState.sessions[sid]?.source ?? appState.primarySource
     }
-    private var codexUsage: UsageProviderSnapshot? {
-        guard displaySource == UsageProviderSource.codex.rawValue else { return nil }
-        return appState.usageSnapshot.providers.first(where: { $0.source == .codex })
+    private var usageProvider: UsageProviderSnapshot? {
+        NotchPanelView.compactUsageProvider(
+            from: appState.usageSnapshot,
+            sessions: appState.sessions,
+            rotatingSessionId: appState.rotatingSessionId,
+            activeSessionId: appState.activeSessionId,
+            primarySource: displaySource
+        )
     }
 
     var body: some View {
@@ -410,8 +432,8 @@ private struct CompactRightWing: View {
                         .symbolEffect(.pulse, options: .repeating)
                 }
 
-                if let codexUsage {
-                    CompactUsageBadge(provider: codexUsage)
+                if let usageProvider {
+                    CompactUsageBadge(provider: usageProvider)
                 }
 
                 if showToolStatus {
@@ -457,16 +479,9 @@ struct CompactUsageBadge: View {
 
     private var primary: UsageWindowStat { provider.primary }
     private var tint: Color { Color(hex: primary.tintHex) }
-    private var label: String {
-        provider.source == .codex ? l10n["usage_remaining"] : l10n["usage_used"]
-    }
+    private var label: String { l10n["usage_remaining"] }
     private var helpText: String {
-        let headline: String
-        if provider.source == .codex {
-            headline = "\(provider.source.title) \(primary.label) \(l10n["usage_used"]): \(100 - primary.percentage)% · \(l10n["usage_remaining"]): \(primary.percentage)%"
-        } else {
-            headline = "\(provider.source.title) \(primary.label) \(label): \(primary.percentage)%"
-        }
+        let headline = "\(provider.source.title) \(primary.label) \(l10n["usage_used"]): \(provider.primaryUsedPercentage)% · \(l10n["usage_remaining"]): \(provider.primaryRemainingPercentage)%"
         var lines = [headline, primary.detail]
         if let summary = provider.summary, !summary.isEmpty {
             lines.append(summary)
@@ -487,7 +502,7 @@ struct CompactUsageBadge: View {
                 .foregroundStyle(.white.opacity(0.55))
             Text(label.uppercased())
                 .foregroundStyle(.white.opacity(0.75))
-            Text("\(primary.percentage)%")
+            Text("\(provider.primaryRemainingPercentage)%")
                 .foregroundStyle(tint)
         }
         .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
@@ -512,6 +527,21 @@ struct CompactUsageBadge: View {
             return String(format: "%.1fK", Double(totalTokens) / 1_000)
         }
         return "\(totalTokens)"
+    }
+}
+
+extension UsageProviderSnapshot {
+    var primaryRemainingPercentage: Int {
+        switch source {
+        case .claude:
+            max(0, min(100, 100 - primary.percentage))
+        case .codex:
+            max(0, min(100, primary.percentage))
+        }
+    }
+
+    var primaryUsedPercentage: Int {
+        max(0, min(100, 100 - primaryRemainingPercentage))
     }
 }
 
@@ -1151,6 +1181,19 @@ enum SessionListPresentation {
     case menuBar
 }
 
+private struct SessionListContentHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+private enum SessionListRowStyle {
+    case fullCard
+    case compactRow
+}
+
 struct SessionListView: View {
     var appState: AppState
     /// When set, only show this session (auto-expand on completion)
@@ -1166,103 +1209,6 @@ struct SessionListView: View {
               session.source == "codex",
               appState.canContinueActiveCodexSession else { return nil }
         return sessionId
-    }
-
-    /// Sort priority: attention-needed > active > recent activity > stable ID
-    private func sortedByActivity(_ ids: [String]) -> [String] {
-        ids.sorted { a, b in
-            guard let sa = appState.sessions[a], let sb = appState.sessions[b] else { return a < b }
-            let attA = sa.status == .waitingApproval || sa.status == .waitingQuestion
-            let attB = sb.status == .waitingApproval || sb.status == .waitingQuestion
-            if attA != attB { return attA }
-            let actA = sa.status != .idle
-            let actB = sb.status != .idle
-            if actA != actB { return actA }
-            if sa.lastActivity != sb.lastActivity { return sa.lastActivity > sb.lastActivity }
-            return a < b
-        }
-    }
-
-    /// Most recent activity date among sessions in a group
-    private func groupLatestActivity(_ ids: [String]) -> Date {
-        ids.compactMap { appState.sessions[$0]?.lastActivity }.max() ?? .distantPast
-    }
-
-    private var groupedSessions: [(header: String, source: String?, ids: [String])] {
-        if let only = onlySessionId, appState.sessions[only] != nil {
-            return [("", nil, [only])]
-        }
-
-        let allIds = Array(appState.sessions.keys)
-
-        switch groupingMode {
-        case "project":
-            var projectGroups: [String: [String]] = [:]
-            for id in allIds {
-                let project = appState.sessions[id]?.displayName ?? "Session"
-                projectGroups[project, default: []].append(id)
-            }
-            // Sort groups by most recent activity within each group
-            let sortedProjects = projectGroups.keys.sorted { a, b in
-                groupLatestActivity(projectGroups[a]!) > groupLatestActivity(projectGroups[b]!)
-            }
-            return sortedProjects.map { project in
-                let ids = sortedByActivity(projectGroups[project]!)
-                return ("\(project) (\(ids.count))", nil, ids)
-            }
-
-        case "status":
-            let l10n = L10n.shared
-            let groups: [(Set<AgentStatus>, String)] = [
-                ([.running], l10n["status_running"]),
-                ([.waitingApproval, .waitingQuestion], l10n["status_waiting"]),
-                ([.processing], l10n["status_processing"]),
-                ([.idle], l10n["status_idle"]),
-            ]
-            var result: [(String, String?, [String])] = []
-            for (statuses, label) in groups {
-                let ids = sortedByActivity(allIds.filter { id in
-                    guard let s = appState.sessions[id] else { return false }
-                    return statuses.contains(s.status)
-                })
-                if !ids.isEmpty {
-                    result.append(("\(label) (\(ids.count))", nil, ids))
-                }
-            }
-            return result
-
-        case "cli":
-            let cliOrder: [(source: String, name: String)] = [
-                ("claude", "Claude"),
-                ("codex", "Codex"),
-                ("gemini", "Gemini"),
-                ("cursor", "Cursor"),
-                ("copilot", "Copilot"),
-                ("qoder", "Qoder"),
-                ("droid", "Factory"),
-                ("codebuddy", "CodeBuddy"),
-                ("opencode", "OpenCode"),
-            ]
-            var result: [(String, String?, [String])] = []
-            var seen = Set<String>()
-            for cli in cliOrder {
-                let ids = sortedByActivity(allIds.filter { id in
-                    appState.sessions[id]?.source == cli.source
-                })
-                ids.forEach { seen.insert($0) }
-                if !ids.isEmpty {
-                    result.append(("\(cli.name) (\(ids.count))", cli.source, ids))
-                }
-            }
-            let remaining = sortedByActivity(allIds.filter { !seen.contains($0) })
-            if !remaining.isEmpty {
-                result.append(("\(L10n.shared["other"]) (\(remaining.count))", nil, remaining))
-            }
-            return result
-
-        default: // "all"
-            return [("", nil, sortedByActivity(allIds))]
-        }
     }
 
     static func needsScroll(
@@ -1290,97 +1236,159 @@ struct SessionListView: View {
         return estimatedVisibleUnits > Double(maxVisibleSessions)
     }
 
+    static func usesCompactRow(
+        status: AgentStatus,
+        sessionId: String,
+        activeSessionId: String?,
+        onlySessionId: String?
+    ) -> Bool {
+        guard onlySessionId == nil else { return false }
+        guard sessionId != activeSessionId else { return false }
+
+        switch status {
+        case .idle:
+            return true
+        case .processing, .running, .waitingApproval, .waitingQuestion:
+            return false
+        }
+    }
+
     var body: some View {
-        // Compute once per render — groupedSessions, totalCount, needsScroll
-        let groups = groupedSessions
-        let totalSessionCount = groups.reduce(0) { $0 + $1.ids.count }
-        let groupHeaderCount = groups.filter { !$0.header.isEmpty }.count
+        let snapshot = appState.sessionListPresentation(
+            groupingMode: groupingMode,
+            onlySessionId: onlySessionId
+        )
         let needsScroll = Self.needsScroll(
-            totalSessionCount: totalSessionCount,
-            groupHeaderCount: groupHeaderCount,
+            totalSessionCount: snapshot.totalSessionCount,
+            groupHeaderCount: snapshot.groupHeaderCount,
             hasComposer: activeCodexSessionId != nil,
             maxVisibleSessions: maxVisibleSessions,
             onlySessionId: onlySessionId,
             presentation: presentation
         )
-        let content = VStack(spacing: 6) {
-            ForEach(groups, id: \.header) { group in
-                if !group.header.isEmpty {
-                    HStack(spacing: 6) {
-                        if let src = group.source, let icon = cliIcon(source: src) {
-                            Image(nsImage: icon)
-                                .resizable()
-                                .frame(width: 14, height: 14)
-                        }
-                        Text(group.header)
-                            .font(.system(size: 11, weight: .medium, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.5))
-                        Spacer()
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.top, 6)
-                    .padding(.bottom, 2)
-                }
+        let notchScrollMaxHeight = CGFloat(maxVisibleSessions) * 90
 
-                ForEach(group.ids, id: \.self) { sessionId in
-                    if let session = appState.sessions[sessionId] {
+        Group {
+            if presentation == .menuBar {
+                ScrollView(.vertical) {
+                    sessionRows(lazy: true, groups: snapshot.groups)
+                }
+                .scrollIndicators(.automatic)
+            } else if needsScroll {
+                AutoHeightSessionScrollView(maxHeight: notchScrollMaxHeight) {
+                    sessionRows(lazy: false, groups: snapshot.groups)
+                } scrollContent: {
+                    sessionRows(lazy: true, groups: snapshot.groups)
+                }
+                .clipShape(
+                    UnevenRoundedRectangle(
+                        topLeadingRadius: 0, bottomLeadingRadius: 20,
+                        bottomTrailingRadius: 20, topTrailingRadius: 0,
+                        style: .continuous
+                    )
+                )
+            } else {
+                sessionRows(lazy: false, groups: snapshot.groups)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func sessionRows(lazy: Bool, groups: [SessionListGroupPresentation]) -> some View {
+        if lazy {
+            LazyVStack(spacing: 6) {
+                sessionRowSections(groups: groups)
+            }
+            .padding(.vertical, 4)
+        } else {
+            VStack(spacing: 6) {
+                sessionRowSections(groups: groups)
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    @ViewBuilder
+    private func sessionRowSections(groups: [SessionListGroupPresentation]) -> some View {
+        ForEach(groups) { group in
+            if !group.header.isEmpty {
+                HStack(spacing: 6) {
+                    if let src = group.source, let icon = cliIcon(source: src) {
+                        Image(nsImage: icon)
+                            .resizable()
+                            .frame(width: 14, height: 14)
+                    }
+                    Text(group.header)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.5))
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 6)
+                .padding(.bottom, 2)
+            }
+
+            ForEach(group.ids, id: \.self) { sessionId in
+                if let session = appState.sessions[sessionId] {
+                    let style = rowStyle(for: sessionId, session: session)
+                    let needsCompletionReview = appState.needsCompletionReview(sessionId: sessionId)
+                    switch style {
+                    case .fullCard:
                         SessionCard(
                             appState: appState,
                             sessionId: sessionId,
                             session: session,
-                            isCompletion: onlySessionId != nil
+                            isCompletion: onlySessionId != nil,
+                            isSelected: sessionId == appState.activeSessionId
                         )
+                    case .compactRow:
+                        CompactSessionRow(
+                            appState: appState,
+                            sessionId: sessionId,
+                            session: session,
+                            isSelected: sessionId == appState.activeSessionId,
+                            needsCompletionReview: needsCompletionReview
+                        )
+                        .equatable()
                     }
                 }
-            }
-
-            // "Show all sessions" — hover with delay to expand
-            if onlySessionId != nil && appState.sessions.count > 1 {
-                SessionsExpandLink(count: appState.sessions.count) {
-                    withAnimation(NotchAnimation.open) {
-                        appState.surface = .sessionList
-                        appState.cancelCompletionQueue()
-                    }
-                }
-            }
-
-            if let sessionId = activeCodexSessionId,
-               let session = appState.sessions[sessionId] {
-                CodexComposerBar(
-                    projectName: session.projectDisplayName,
-                    text: $codexInput,
-                    onSubmit: {
-                        let value = codexInput.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !value.isEmpty else { return }
-                        appState.sendPromptToSession(sessionId, text: value)
-                        codexInput = ""
-                    }
-                )
             }
         }
-        .padding(.vertical, 4)
 
-        if needsScroll {
-            // Notch mode clamps the scroll view to an estimated row height so
-            // it visually hugs the list; menu bar mode lets the scroll view
-            // fill the popover's fixed content area so overflow actually
-            // scrolls instead of getting clipped.
-            let scrollMaxHeight: CGFloat = presentation == .menuBar
-                ? .greatestFiniteMagnitude
-                : CGFloat(maxVisibleSessions) * 90
-            ThinScrollView(maxHeight: scrollMaxHeight) {
-                content
+        if onlySessionId != nil && appState.sessions.count > 1 {
+            SessionsExpandLink(count: appState.sessions.count) {
+                withAnimation(NotchAnimation.open) {
+                    appState.surface = .sessionList
+                    appState.cancelCompletionQueue()
+                }
             }
-            .clipShape(
-                UnevenRoundedRectangle(
-                    topLeadingRadius: 0, bottomLeadingRadius: 20,
-                    bottomTrailingRadius: 20, topTrailingRadius: 0,
-                    style: .continuous
-                )
+        }
+
+        if let sessionId = activeCodexSessionId,
+           let session = appState.sessions[sessionId] {
+            CodexComposerBar(
+                projectName: session.projectDisplayName,
+                text: $codexInput,
+                onSubmit: {
+                    let value = codexInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !value.isEmpty else { return }
+                    appState.sendPromptToSession(sessionId, text: value)
+                    codexInput = ""
+                }
             )
-        } else {
-            content
         }
+    }
+
+    private func rowStyle(for sessionId: String, session: SessionSnapshot) -> SessionListRowStyle {
+        if Self.usesCompactRow(
+            status: session.status,
+            sessionId: sessionId,
+            activeSessionId: appState.activeSessionId,
+            onlySessionId: onlySessionId
+        ) {
+            return .compactRow
+        }
+        return .fullCard
     }
 }
 
@@ -1444,49 +1452,56 @@ private struct CodexComposerBar: View {
     }
 }
 
-/// Thin overlay scrollbar via NSScrollView — ignores system "show scrollbar" preference.
-private struct ThinScrollView<Content: View>: NSViewRepresentable {
+private struct AutoHeightSessionScrollView<Content: View, ScrollContent: View>: View {
     let maxHeight: CGFloat
-    @ViewBuilder let content: Content
+    @ViewBuilder let content: () -> Content
+    @ViewBuilder let scrollContent: () -> ScrollContent
+    @State private var contentHeight: CGFloat = 0
 
-    func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
-        scrollView.hasVerticalScroller = true
-        scrollView.drawsBackground = false
-        scrollView.scrollerKnobStyle = .light
-        scrollView.autohidesScrollers = false
-        scrollView.scrollerStyle = .legacy
-        scrollView.verticalScroller?.controlSize = .small
-
-        let hosting = NSHostingView(rootView: content)
-        hosting.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.documentView = hosting
-
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        var constraints: [NSLayoutConstraint] = [
-            hosting.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
-            hosting.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor),
-        ]
-        // When maxHeight is unbounded, let the parent (e.g. a fixed-size
-        // popover) drive the scroll view's height. Otherwise cap it so the
-        // notch surface hugs its content.
-        if maxHeight.isFinite && maxHeight < .greatestFiniteMagnitude {
-            constraints.append(
-                scrollView.heightAnchor.constraint(lessThanOrEqualToConstant: maxHeight)
-            )
+    var body: some View {
+        if contentHeight > maxHeight {
+            ScrollView(.vertical) {
+                measuredScrollContent
+            }
+            .scrollIndicators(.automatic)
+            .frame(height: maxHeight)
+        } else {
+            measuredContent
         }
-        NSLayoutConstraint.activate(constraints)
-
-        return scrollView
     }
 
-    func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        if let hosting = scrollView.documentView as? NSHostingView<Content> {
-            hosting.rootView = content
-        }
-        scrollView.autohidesScrollers = false
-        scrollView.scrollerStyle = .legacy
-        scrollView.verticalScroller?.controlSize = .small
+    private var measuredContent: some View {
+        content()
+            .background(
+                GeometryReader { geo in
+                    Color.clear.preference(
+                        key: SessionListContentHeightKey.self,
+                        value: geo.size.height
+                    )
+                }
+            )
+            .onPreferenceChange(SessionListContentHeightKey.self) { height in
+                if height > 0 {
+                    contentHeight = height
+                }
+            }
+    }
+
+    private var measuredScrollContent: some View {
+        scrollContent()
+            .background(
+                GeometryReader { geo in
+                    Color.clear.preference(
+                        key: SessionListContentHeightKey.self,
+                        value: geo.size.height
+                    )
+                }
+            )
+            .onPreferenceChange(SessionListContentHeightKey.self) { height in
+                if height > 0 {
+                    contentHeight = height
+                }
+            }
     }
 }
 
@@ -1569,7 +1584,7 @@ private struct ProjectNameLink: View {
                     Self.openInEditor(cwd)
                 }
             }
-            .help(cwd != nil ? "\(L10n.shared["open_path"]) \(cwd!)" : "")
+            .help(cwd != nil ? L10n.shared["open_path"] : "")
     }
 
     private static let editorCandidates: [(executable: String, arguments: [String])] = [
@@ -1659,17 +1674,15 @@ private struct SessionCard: View {
     let sessionId: String
     let session: SessionSnapshot
     var isCompletion: Bool = false
+    var isSelected: Bool = false
     @State private var hovering = false
     @State private var inlineAnswer = ""
     @AppStorage(SettingsKey.contentFontSize) private var contentFontSize = SettingsDefaults.contentFontSize
     @AppStorage(SettingsKey.aiMessageLines) private var aiMessageLines = SettingsDefaults.aiMessageLines
     @AppStorage(SettingsKey.showAgentDetails) private var showAgentDetails = SettingsDefaults.showAgentDetails
     private var fontSize: CGFloat { CGFloat(contentFontSize) }
-    private var aiLineLimit: Int? { hovering ? min(max(aiMessageLines, 2), 4) : (aiMessageLines > 0 ? aiMessageLines : nil) }
+    private var aiLineLimit: Int? { aiMessageLines > 0 ? aiMessageLines : nil }
     private var visibleMessages: [ChatMessage] {
-        if hovering {
-            return Array(session.recentMessages.suffix(3))
-        }
         return session.status != .idle ? Array(session.recentMessages.suffix(2)) : session.recentMessages
     }
     private var pendingPermission: PermissionRequest? {
@@ -1693,12 +1706,10 @@ private struct SessionCard: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
-            // Column 1: Character + subagent icons
             VStack(spacing: 3) {
-                MascotView(source: session.source, status: session.status, size: 32)
+                MascotView(source: session.source, status: session.status, size: 32, animated: false)
                 if showAgentDetails && !session.subagents.isEmpty {
                     let sorted = session.subagents.values.sorted { $0.startTime < $1.startTime }
-                    // Grid: 4 per row, 8px icons
                     let rows = stride(from: 0, to: sorted.count, by: 4).map {
                         Array(sorted[$0..<min($0 + 4, sorted.count)])
                     }
@@ -1715,9 +1726,7 @@ private struct SessionCard: View {
             }
             .frame(width: 36)
 
-            // Column 2: Content
             VStack(alignment: .leading, spacing: 6) {
-                // Header: project name + optional session label + short ID
                 HStack(alignment: .center, spacing: 8) {
                     SessionIdentityLine(
                         session: session,
@@ -1738,12 +1747,11 @@ private struct SessionCard: View {
                         if session.isYoloMode == true {
                             SessionTag("YOLO", color: Color(red: 1.0, green: 0.35, blue: 0.35))
                         }
-                        SessionTag(timeAgo(session.startTime))
-                        TerminalJumpButton(session: session, sessionId: sessionId)
+                        SessionTag(timeAgoText(session.startTime))
+                        TerminalJumpButton(session: session, sessionId: sessionId, appState: appState)
                     }
                 }
 
-                // Session title: first user prompt (hide when detailed mode shows chat history)
                 if let prompt = session.lastUserPrompt,
                    session.recentMessages.isEmpty {
                     Text(prompt)
@@ -1753,140 +1761,368 @@ private struct SessionCard: View {
                         .truncationMode(.tail)
                 }
 
-            // Chat history + live status
-            if !session.recentMessages.isEmpty || session.status != .idle {
-                VStack(alignment: .leading, spacing: 3) {
-                    ForEach(visibleMessages) { msg in
-                        if msg.isUser {
-                            HStack(alignment: .top, spacing: 4) {
-                                Text(">")
-                                    .font(.system(size: fontSize, weight: .bold, design: .monospaced))
-                                    .foregroundStyle(Color(red: 0.3, green: 0.85, blue: 0.4))
-                                Text(renderUserText(msg.text))
-                                    .font(.system(size: fontSize, weight: .medium, design: .monospaced))
-                                    .foregroundStyle(.white.opacity(0.9))
-                                    .lineLimit(hovering ? 2 : 1)
-                                    .truncationMode(.tail)
+                if !session.recentMessages.isEmpty || session.status != .idle {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(visibleMessages) { msg in
+                            if msg.isUser {
+                                HStack(alignment: .top, spacing: 4) {
+                                    Text(">")
+                                        .font(.system(size: fontSize, weight: .bold, design: .monospaced))
+                                        .foregroundStyle(Color(red: 0.3, green: 0.85, blue: 0.4))
+                                    Text(ChatMessageTextFormatter.literalText(msg.text))
+                                        .font(.system(size: fontSize, weight: .medium, design: .monospaced))
+                                        .foregroundStyle(.white.opacity(0.9))
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                }
+                            } else {
+                                HStack(alignment: .top, spacing: 4) {
+                                    Text("$")
+                                        .font(.system(size: fontSize, weight: .bold, design: .monospaced))
+                                        .foregroundStyle(Color(red: 0.85, green: 0.47, blue: 0.34))
+                                    Text(ChatMessageTextFormatter.inlineMarkdown(condensedMessagePreview(stripDirectives(msg.text))))
+                                        .font(.system(size: fontSize, design: .monospaced))
+                                        .foregroundStyle(.white.opacity(0.85))
+                                        .lineLimit(aiLineLimit)
+                                        .truncationMode(.tail)
+                                }
                             }
-                        } else {
-                            HStack(alignment: .top, spacing: 4) {
+                        }
+
+                        if session.status != .idle {
+                            HStack(spacing: 4) {
                                 Text("$")
                                     .font(.system(size: fontSize, weight: .bold, design: .monospaced))
                                     .foregroundStyle(Color(red: 0.85, green: 0.47, blue: 0.34))
-                                Text(renderMarkdown(compactText(stripDirectives(msg.text))))
-                                    .font(.system(size: fontSize, design: .monospaced))
-                                    .foregroundStyle(.white.opacity(0.85))
-                                    .lineLimit(aiLineLimit)
-                                    .truncationMode(.tail)
+                                if let tool = session.currentTool {
+                                    Text(session.toolDescription ?? tool)
+                                        .font(.system(size: fontSize, design: .monospaced))
+                                        .foregroundStyle(.white.opacity(0.75))
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                } else {
+                                    TypingIndicator(fontSize: fontSize, label: "thinking")
+                                }
                             }
                         }
                     }
-
-                    // Working indicator: show what AI is doing right now
-                    if session.status != .idle {
-                        HStack(spacing: 4) {
-                            Text("$")
-                                .font(.system(size: fontSize, weight: .bold, design: .monospaced))
-                                .foregroundStyle(Color(red: 0.85, green: 0.47, blue: 0.34))
-                            if let tool = session.currentTool {
-                                Text(session.toolDescription ?? tool)
-                                    .font(.system(size: fontSize, design: .monospaced))
-                                    .foregroundStyle(.white.opacity(0.75))
-                                    .lineLimit(1)
-                                    .truncationMode(.tail)
-                            } else {
-                                TypingIndicator(fontSize: fontSize, label: "thinking")
-                            }
-                        }
-                    }
+                    .padding(.leading, 4)
                 }
-                .padding(.leading, 4)
             }
-
-                if hovering, let cwd = session.cwd, !cwd.isEmpty {
-                    HStack(spacing: 5) {
-                        Image(systemName: "folder.fill")
-                            .font(.system(size: max(9, fontSize - 1)))
-                            .foregroundStyle(.white.opacity(0.4))
-                        Text(cwd)
-                            .font(.system(size: max(10, fontSize - 1), design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.45))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    .padding(.top, 2)
-                }
-
-                if hovering, let pendingPermission {
-                    HoverApprovalActions(
-                        request: pendingPermission,
-                        onAllow: { appState.approvePermission(always: false) },
-                        onAlwaysAllow: { appState.approvePermission(always: true) },
-                        onDeny: { appState.denyPermission() }
-                    )
-                    .padding(.top, 6)
-                }
-
-                if hovering, let pendingQuestion {
-                    HoverQuestionActions(
-                        request: pendingQuestion,
-                        textInput: $inlineAnswer,
-                        onAnswer: { answer in
-                            appState.answerQuestion(answer)
-                            inlineAnswer = ""
-                        },
-                        onSkip: {
-                            appState.skipQuestion()
-                            inlineAnswer = ""
-                        }
-                    )
-                    .padding(.top, 6)
-                }
-            } // end Column 2 VStack
-        } // end HStack
+        }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(
             RoundedRectangle(cornerRadius: 10)
-                .fill(hovering ? Color.white.opacity(0.10) : Color.white.opacity(0.05))
+                .fill(
+                    isSelected
+                        ? Color.white.opacity(0.12)
+                        : (hovering ? Color.white.opacity(0.10) : Color.white.opacity(0.05))
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(
+                    isSelected
+                        ? Color.white.opacity(0.14)
+                        : Color.clear,
+                    lineWidth: 1
+                )
         )
         .padding(.horizontal, 6)
         .contentShape(Rectangle())
         .onHover { h in withAnimation(NotchAnimation.micro) { hovering = h } }
-        .onTapGesture {
-            if isCompletion {
-                SessionJumpRouter.jump(to: session, sessionId: sessionId)
+        .onTapGesture(perform: handleTap)
+    }
+
+    private func handleTap() {
+        guard isCompletion else { return }
+        appState.jumpToSession(sessionId)
+    }
+}
+
+private struct CompactSessionRenderSignature: Equatable {
+    let sessionId: String
+    let status: AgentStatus
+    let projectName: String
+    let sessionLabel: String?
+    let displaySessionId: String
+    let previewText: String?
+    let sourceLabel: String
+    let terminalName: String?
+    let interrupted: Bool
+    let isYoloMode: Bool
+    let needsCompletionReview: Bool
+    let ageText: String
+}
+
+private struct CompactSessionRow: View, Equatable {
+    var appState: AppState
+    let sessionId: String
+    let session: SessionSnapshot
+    let isSelected: Bool
+    let needsCompletionReview: Bool
+    @State private var hovering = false
+
+    static func == (lhs: CompactSessionRow, rhs: CompactSessionRow) -> Bool {
+        lhs.isSelected == rhs.isSelected
+            && lhs.renderSignature == rhs.renderSignature
+    }
+
+    private var renderSignature: CompactSessionRenderSignature {
+        CompactSessionRenderSignature(
+            sessionId: sessionId,
+            status: session.status,
+            projectName: session.projectDisplayName,
+            sessionLabel: session.sessionLabel,
+            displaySessionId: session.displaySessionId(sessionId: sessionId),
+            previewText: previewText,
+            sourceLabel: session.sourceLabel,
+            terminalName: session.terminalName,
+            interrupted: session.interrupted,
+            isYoloMode: session.isYoloMode == true,
+            needsCompletionReview: needsCompletionReview,
+            ageText: timeAgoText(session.startTime)
+        )
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            CompactSessionMascotBadge(
+                source: session.source,
+                status: session.status,
+                isSelected: isSelected,
+                isHovered: hovering
+            )
+            .padding(.top, 1)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .center, spacing: 8) {
+                    HStack(spacing: 4) {
+                        Text(session.projectDisplayName)
+                            .font(.system(size: 12.8, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(titleColor)
+                            .lineLimit(1)
+
+                        if let label = session.sessionLabel {
+                            Text("#\(label)")
+                                .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.56))
+                                .lineLimit(1)
+                        }
+
+                        Text("#\(shortSessionId(session.displaySessionId(sessionId: sessionId)))")
+                            .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.34))
+                            .fixedSize()
+                    }
+
+                    Spacer(minLength: 8)
+
+                    HStack(spacing: 4) {
+                        if session.interrupted {
+                            SessionTag("INT", color: Color(red: 1.0, green: 0.6, blue: 0.2))
+                        }
+                        if session.isYoloMode == true {
+                            SessionTag("YOLO", color: Color(red: 1.0, green: 0.35, blue: 0.35))
+                        }
+                        if needsCompletionReview {
+                            SessionTag(L10n.shared["completion_pending_review"], color: completionReviewColor)
+                        }
+                        SessionTag(timeAgoText(session.startTime))
+                        TerminalJumpButton(session: session, sessionId: sessionId, appState: appState)
+                    }
+                }
+
+                HStack(spacing: 6) {
+                    Text(session.sourceLabel)
+                        .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(sourceColor)
+
+                    if let previewText, !previewText.isEmpty {
+                        Text(previewText)
+                            .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.white.opacity(isSelected ? 0.72 : 0.54))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    } else if session.status != .idle {
+                        Text("thinking")
+                            .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.46))
+                            .lineLimit(1)
+                    }
+                }
             }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(backgroundColor)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(borderColor, lineWidth: 1)
+        )
+        .padding(.horizontal, 6)
+        .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) {
+                self.hovering = hovering
+            }
+        }
+        .onTapGesture {
+            guard !isSelected else { return }
+            _ = appState.focusSession(sessionId: sessionId)
         }
     }
 
-    /// Collapse consecutive blank lines and trim leading/trailing whitespace
-    private func compactText(_ text: String) -> String {
-        text.components(separatedBy: "\n")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .reduce(into: [String]()) { result, line in
-                // Skip consecutive empty lines
-                if line.isEmpty && (result.last?.isEmpty ?? true) { return }
-                result.append(line)
+    private var previewText: String? {
+        if session.status != .idle, let tool = session.currentTool {
+            let value = (session.toolDescription ?? tool).trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? tool : value
+        }
+
+        if let assistant = session.lastAssistantMessage {
+            let cleaned = condensedMessagePreview(stripDirectives(assistant))
+            if !cleaned.isEmpty {
+                return cleaned
             }
-            .joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        if let prompt = session.lastUserPrompt?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !prompt.isEmpty {
+            return prompt
+        }
+
+        if let lastMessage = session.recentMessages.last?.text {
+            let cleaned = condensedMessagePreview(stripDirectives(lastMessage))
+            return cleaned.isEmpty ? nil : cleaned
+        }
+
+        return nil
     }
 
-    private func renderMarkdown(_ text: String) -> AttributedString {
-        ChatMessageTextFormatter.inlineMarkdown(text)
+    private var titleColor: Color {
+        if isSelected {
+            return .white.opacity(0.92)
+        }
+        if hovering {
+            return .white.opacity(0.82)
+        }
+        switch session.status {
+        case .processing, .running:
+            return Color(red: 0.3, green: 0.85, blue: 0.4).opacity(0.92)
+        case .waitingApproval, .waitingQuestion:
+            return Color(red: 1.0, green: 0.6, blue: 0.2).opacity(0.92)
+        case .idle:
+            return .white.opacity(0.74)
+        }
     }
 
-    private func renderUserText(_ text: String) -> AttributedString {
-        ChatMessageTextFormatter.literalText(text)
+    private var sourceColor: Color {
+        switch session.status {
+        case .processing, .running:
+            return Color(red: 0.3, green: 0.85, blue: 0.4).opacity(isSelected ? 0.9 : 0.78)
+        case .waitingApproval, .waitingQuestion:
+            return Color(red: 1.0, green: 0.6, blue: 0.2).opacity(0.88)
+        case .idle:
+            return .white.opacity(isSelected ? 0.5 : 0.4)
+        }
     }
 
-    private func timeAgo(_ date: Date) -> String {
-        let seconds = Int(-date.timeIntervalSinceNow)
-        if seconds < 60 { return "<1m" }
-        if seconds < 3600 { return "\(seconds / 60)m" }
-        if seconds < 86400 { return "\(seconds / 3600)h" }
-        return "\(seconds / 86400)d"
+    private var backgroundColor: Color {
+        if isSelected {
+            return Color.white.opacity(0.11)
+        }
+        if needsCompletionReview {
+            return hovering ? completionReviewColor.opacity(0.10) : completionReviewColor.opacity(0.06)
+        }
+        if hovering {
+            return Color.white.opacity(0.08)
+        }
+        return Color.white.opacity(0.035)
+    }
+
+    private var borderColor: Color {
+        if isSelected {
+            return Color.white.opacity(0.12)
+        }
+        if needsCompletionReview {
+            return completionReviewColor.opacity(hovering ? 0.22 : 0.14)
+        }
+        if hovering {
+            return Color.white.opacity(0.08)
+        }
+        return Color.clear
+    }
+
+    private var completionReviewColor: Color {
+        Color(red: 0.48, green: 0.8, blue: 1.0)
+    }
+}
+
+private struct CompactSessionMascotBadge: View {
+    let source: String
+    let status: AgentStatus
+    let isSelected: Bool
+    let isHovered: Bool
+
+    var body: some View {
+        ZStack(alignment: .bottomTrailing) {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(chipFill)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .strokeBorder(chipBorder, lineWidth: 1)
+                )
+                .frame(width: 26, height: 26)
+
+            MascotView(source: source, status: status, size: 18, animated: false)
+                .frame(width: 22, height: 22)
+
+            Circle()
+                .fill(primaryTint)
+                .frame(width: 6, height: 6)
+                .overlay(
+                    Circle()
+                        .strokeBorder(Color.black.opacity(0.38), lineWidth: 0.8)
+                )
+                .offset(x: 1, y: 1)
+        }
+        .frame(width: 26, height: 26)
+    }
+
+    private var chipFill: Color {
+        if isSelected {
+            return Color.white.opacity(0.09)
+        }
+        if isHovered {
+            return Color.white.opacity(0.06)
+        }
+        return Color.white.opacity(0.03)
+    }
+
+    private var chipBorder: Color {
+        if isSelected {
+            return Color.white.opacity(0.12)
+        }
+        if isHovered {
+            return Color.white.opacity(0.08)
+        }
+        return Color.white.opacity(0.04)
+    }
+
+    private var primaryTint: Color {
+        switch status {
+        case .processing, .running:
+            return Color(red: 0.3, green: 0.85, blue: 0.4).opacity(isSelected || isHovered ? 1 : 0.8)
+        case .waitingApproval, .waitingQuestion:
+            return Color(red: 1.0, green: 0.6, blue: 0.2).opacity(isSelected || isHovered ? 1 : 0.82)
+        case .idle:
+            return Color.white.opacity(isSelected || isHovered ? 0.5 : 0.26)
+        }
     }
 }
 
@@ -2214,6 +2450,7 @@ private struct NotchPanelShape: Shape {
 private struct TerminalJumpButton: View {
     let session: SessionSnapshot
     let sessionId: String
+    let appState: AppState
     @State private var hovering = false
 
     private let green = Color(red: 0.3, green: 0.85, blue: 0.4)
@@ -2243,7 +2480,7 @@ private struct TerminalJumpButton: View {
 
     var body: some View {
         Button {
-            SessionJumpRouter.jump(to: session, sessionId: sessionId)
+            appState.jumpToSession(sessionId)
         } label: {
             HStack(spacing: 4) {
                 if let icon = termIcon {
@@ -2601,4 +2838,32 @@ private func stripDirectives(_ text: String) -> String {
 
     let cleaned = result.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     return cleaned
+}
+
+private func condensedMessagePreview(_ text: String) -> String {
+    text
+        .components(separatedBy: "\n")
+        .map { $0.trimmingCharacters(in: .whitespaces) }
+        .reduce(into: [String]()) { result, line in
+            if line.isEmpty && (result.last?.isEmpty ?? true) {
+                return
+            }
+            result.append(line)
+        }
+        .joined(separator: "\n")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func timeAgoText(_ date: Date) -> String {
+    let seconds = Int(-date.timeIntervalSinceNow)
+    if seconds < 60 {
+        return "<1m"
+    }
+    if seconds < 3600 {
+        return "\(seconds / 60)m"
+    }
+    if seconds < 86_400 {
+        return "\(seconds / 3600)h"
+    }
+    return "\(seconds / 86_400)d"
 }

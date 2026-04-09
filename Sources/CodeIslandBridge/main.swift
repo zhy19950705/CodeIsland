@@ -85,6 +85,13 @@ func resolveCmuxEnvironment(_ env: [String: String]) -> [String: String] {
         return resolved
     }
 
+    // `cmux identify --json` can trigger TCC/WindowServer checks on newer macOS
+    // builds, which surfaces misleading screen-recording prompts. Prefer the
+    // environment cmux already injected unless the user explicitly opts in.
+    guard ProcessInfo.processInfo.environment["CODEISLAND_ENABLE_CMUX_IDENTIFY"] == "1" else {
+        return resolved
+    }
+
     guard let executable = findBinary("cmux") ?? {
         let bundledPath = "/Applications/cmux.app/Contents/Resources/bin/cmux"
         return FileManager.default.isExecutableFile(atPath: bundledPath) ? bundledPath : nil

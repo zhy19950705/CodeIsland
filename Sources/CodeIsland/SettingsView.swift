@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import CodeIslandCore
 
 // MARK: - Navigation Model
@@ -320,8 +321,18 @@ private struct AIPage: View {
     @State private var usageMonitorSnapshot = UsageMonitorLaunchAgentManager().snapshot()
     @State private var usageStatusMessage = ""
     @State private var usageStatusIsError = false
+    @State private var codexStatus: CodexAccountManagerStatus?
+    @State private var codexAccounts: [CodexManagedAccount] = []
+    @State private var codexStatusMessage = ""
+    @State private var codexStatusIsError = false
+    @State private var autoSwitchSnapshot = CodexAutoSwitchLaunchAgentManager().snapshot()
+    @State private var autoSwitch5hThreshold = 10
+    @State private var autoSwitchWeeklyThreshold = 5
+    @State private var autoSwitchAPIUsageEnabled = true
 
     private let usageMonitorManager = UsageMonitorLaunchAgentManager()
+    private let codexAccountManager = CodexAccountManager()
+    private let autoSwitchManager = CodexAutoSwitchLaunchAgentManager()
 
     var body: some View {
         Form {
@@ -390,9 +401,230 @@ private struct AIPage: View {
                     }
                 }
             }
+
+            Section(l10n["codex_accounts_section"]) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(l10n["codex_accounts"])
+                    Text(l10n["codex_accounts_desc"])
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack(spacing: 8) {
+                    Button {
+                        do {
+                            _ = try codexAccountManager.syncCurrentAuth()
+                            refreshCodexAccounts()
+                            codexStatusMessage = l10n["codex_account_sync_complete"]
+                            codexStatusIsError = false
+                        } catch {
+                            codexStatusMessage = error.localizedDescription
+                            codexStatusIsError = true
+                        }
+                    } label: {
+                        Text(l10n["codex_account_sync_current"])
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button {
+                        guard let selectedURL = chooseCodexImportPath() else { return }
+                        do {
+                            let summary = try codexAccountManager.importPath(selectedURL)
+                            refreshCodexAccounts()
+                            codexStatusMessage = importSummary(summary)
+                            codexStatusIsError = false
+                        } catch {
+                            codexStatusMessage = error.localizedDescription
+                            codexStatusIsError = true
+                        }
+                    } label: {
+                        Text(l10n["codex_account_import"])
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                HStack(spacing: 8) {
+                    Button {
+                        do {
+                            try codexAccountManager.launchCodexLoginInTerminal()
+                            codexStatusMessage = l10n["codex_account_login_started"]
+                            codexStatusIsError = false
+                        } catch {
+                            codexStatusMessage = error.localizedDescription
+                            codexStatusIsError = true
+                        }
+                    } label: {
+                        Text(l10n["codex_account_login"])
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button {
+                        do {
+                            try codexAccountManager.launchCodexLoginInTerminal(deviceAuth: true)
+                            codexStatusMessage = l10n["codex_account_login_device_started"]
+                            codexStatusIsError = false
+                        } catch {
+                            codexStatusMessage = error.localizedDescription
+                            codexStatusIsError = true
+                        }
+                    } label: {
+                        Text(l10n["codex_account_login_device_auth"])
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                if let active = codexStatus?.activeAccount {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(l10n["codex_account_active_label"]): \(active.displayName)")
+                        Text(active.subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else if let currentAuth = codexStatus?.currentAuth,
+                          let email = currentAuth.email {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(l10n["codex_account_current_auth"]): \(email)")
+                        if let plan = currentAuth.planType {
+                            Text(plan.uppercased())
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                if !codexStatusMessage.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: codexStatusIsError ? "xmark.circle.fill" : "checkmark.circle.fill")
+                            .foregroundStyle(codexStatusIsError ? .red : .green)
+                        Text(codexStatusMessage)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if codexAccounts.isEmpty {
+                    Text(l10n["codex_accounts_empty"])
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(codexAccounts) { account in
+                        CodexManagedAccountRow(
+                            account: account,
+                            isActive: account.accountKey == codexStatus?.registry.activeAccountKey,
+                            onActivate: {
+                                do {
+                                    _ = try codexAccountManager.activateAccount(account.accountKey)
+                                    refreshCodexAccounts()
+                                    codexStatusMessage = l10n["codex_account_activate_complete"]
+                                    codexStatusIsError = false
+                                } catch {
+                                    codexStatusMessage = error.localizedDescription
+                                    codexStatusIsError = true
+                                }
+                            },
+                            onRemove: {
+                                do {
+                                    _ = try codexAccountManager.removeAccounts(accountKey: account.accountKey)
+                                    refreshCodexAccounts()
+                                    codexStatusMessage = l10n["codex_account_remove_complete"]
+                                    codexStatusIsError = false
+                                } catch {
+                                    codexStatusMessage = error.localizedDescription
+                                    codexStatusIsError = true
+                                }
+                            }
+                        )
+                    }
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(l10n["codex_auto_switch"])
+                    Text(autoSwitchSnapshot.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack(spacing: 8) {
+                    Button {
+                        do {
+                            if autoSwitchSnapshot.state == .enabled {
+                                _ = try codexAccountManager.updateConfiguration(autoSwitchEnabled: false)
+                                try autoSwitchManager.setEnabled(false)
+                                codexStatusMessage = l10n["codex_auto_switch_disabled"]
+                            } else {
+                                _ = try codexAccountManager.updateConfiguration(autoSwitchEnabled: true)
+                                try autoSwitchManager.setEnabled(true)
+                                codexStatusMessage = l10n["codex_auto_switch_enabled"]
+                            }
+                            codexStatusIsError = false
+                            refreshCodexAccounts()
+                        } catch {
+                            codexStatusMessage = error.localizedDescription
+                            codexStatusIsError = true
+                        }
+                    } label: {
+                        Text(autoSwitchSnapshot.state == .enabled ? l10n["codex_auto_switch_disable"] : l10n["codex_auto_switch_enable"])
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(autoSwitchSnapshot.state == .unavailable)
+
+                    Button {
+                        do {
+                            try autoSwitchManager.runNow()
+                            refreshCodexAccounts()
+                            codexStatusMessage = l10n["codex_auto_switch_run_complete"]
+                            codexStatusIsError = false
+                        } catch {
+                            codexStatusMessage = error.localizedDescription
+                            codexStatusIsError = true
+                        }
+                    } label: {
+                        Text(l10n["codex_auto_switch_run_now"])
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(autoSwitchSnapshot.state == .unavailable)
+                }
+
+                Stepper(value: Binding(
+                    get: { autoSwitch5hThreshold },
+                    set: { newValue in
+                        autoSwitch5hThreshold = newValue
+                        updateAutoSwitchThresholds(fiveHour: newValue, weekly: nil)
+                    }
+                ), in: 0...100, step: 1) {
+                    Text("\(l10n["codex_auto_switch_threshold_5h"]) \(autoSwitch5hThreshold)%")
+                }
+
+                Stepper(value: Binding(
+                    get: { autoSwitchWeeklyThreshold },
+                    set: { newValue in
+                        autoSwitchWeeklyThreshold = newValue
+                        updateAutoSwitchThresholds(fiveHour: nil, weekly: newValue)
+                    }
+                ), in: 0...100, step: 1) {
+                    Text("\(l10n["codex_auto_switch_threshold_weekly"]) \(autoSwitchWeeklyThreshold)%")
+                }
+
+                Toggle(l10n["codex_auto_switch_api_usage"], isOn: Binding(
+                    get: { autoSwitchAPIUsageEnabled },
+                    set: { newValue in
+                        autoSwitchAPIUsageEnabled = newValue
+                        updateAutoSwitchAPIUsage(newValue)
+                    }
+                ))
+            }
         }
         .formStyle(.grouped)
-        .onAppear { refreshUsage() }
+        .onAppear {
+            refreshUsage()
+            refreshCodexAccounts()
+        }
         .onReceive(NotificationCenter.default.publisher(for: UsageSnapshotStore.didUpdateNotification)) { _ in
             refreshUsage()
         }
@@ -401,6 +633,61 @@ private struct AIPage: View {
     private func refreshUsage() {
         usageSnapshot = UsageSnapshotStore.load()
         usageMonitorSnapshot = usageMonitorManager.snapshot()
+    }
+
+    private func refreshCodexAccounts() {
+        do {
+            codexStatus = try codexAccountManager.status()
+            codexAccounts = try codexAccountManager.listAccounts(syncCurrentAuth: false)
+            autoSwitchSnapshot = autoSwitchManager.snapshot()
+            if let codexStatus {
+                autoSwitch5hThreshold = codexStatus.registry.autoSwitch.threshold5hPercent
+                autoSwitchWeeklyThreshold = codexStatus.registry.autoSwitch.thresholdWeeklyPercent
+                autoSwitchAPIUsageEnabled = codexStatus.registry.api.usage
+            }
+        } catch {
+            codexStatus = nil
+            codexAccounts = []
+            autoSwitchSnapshot = autoSwitchManager.snapshot()
+            codexStatusMessage = error.localizedDescription
+            codexStatusIsError = true
+        }
+    }
+
+    private func chooseCodexImportPath() -> URL? {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.resolvesAliases = true
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+
+    private func importSummary(_ summary: CodexImportSummary) -> String {
+        "\(summary.importedCount) \(l10n["codex_account_imported"]) · \(summary.updatedCount) \(l10n["codex_account_updated"]) · \(summary.skippedCount) \(l10n["codex_account_skipped"])"
+    }
+
+    private func updateAutoSwitchThresholds(fiveHour: Int?, weekly: Int?) {
+        do {
+            _ = try codexAccountManager.updateConfiguration(
+                threshold5hPercent: fiveHour,
+                thresholdWeeklyPercent: weekly
+            )
+            refreshCodexAccounts()
+        } catch {
+            codexStatusMessage = error.localizedDescription
+            codexStatusIsError = true
+        }
+    }
+
+    private func updateAutoSwitchAPIUsage(_ enabled: Bool) {
+        do {
+            _ = try codexAccountManager.updateConfiguration(apiUsageEnabled: enabled)
+            refreshCodexAccounts()
+        } catch {
+            codexStatusMessage = error.localizedDescription
+            codexStatusIsError = true
+        }
     }
 }
 
@@ -451,6 +738,7 @@ private struct BehaviorPage: View {
                     Text(l10n["30_minutes"]).tag(30)
                     Text(l10n["1_hour"]).tag(60)
                     Text(l10n["2_hours"]).tag(120)
+                    Text(l10n["1_day"]).tag(1440)
                 } label: {
                     Text(l10n["session_cleanup"])
                     Text(l10n["session_cleanup_desc"])
@@ -1069,6 +1357,59 @@ private struct UsageProviderRow: View {
         formatter.maximumFractionDigits = 2
         formatter.minimumFractionDigits = 2
         return formatter.string(from: NSNumber(value: amount)) ?? String(format: "$%.2f", amount)
+    }
+}
+
+private struct CodexManagedAccountRow: View {
+    @ObservedObject private var l10n = L10n.shared
+    let account: CodexManagedAccount
+    let isActive: Bool
+    let onActivate: () -> Void
+    let onRemove: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(account.displayName)
+                        if isActive {
+                            Text(l10n["codex_account_active_badge"])
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.green)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(
+                                    Capsule(style: .continuous)
+                                        .fill(Color.green.opacity(0.12))
+                                )
+                        }
+                    }
+                    Text(account.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(account.accountKey)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer()
+                HStack(spacing: 8) {
+                    if !isActive {
+                        Button(l10n["codex_account_activate"]) {
+                            onActivate()
+                        }
+                        .buttonStyle(.link)
+                    }
+                    Button(l10n["codex_account_remove"], role: .destructive) {
+                        onRemove()
+                    }
+                    .buttonStyle(.link)
+                }
+            }
+        }
+        .padding(.vertical, 2)
     }
 }
 

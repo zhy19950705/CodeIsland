@@ -35,6 +35,7 @@ final class WorkspaceJumpManager {
         case warp
         case iTerm
         case terminal
+        case obsidian
         case codex
         case openCode
         case cursor
@@ -55,6 +56,7 @@ final class WorkspaceJumpManager {
             case .warp: return "Warp"
             case .iTerm: return "iTerm2"
             case .terminal: return "Terminal"
+            case .obsidian: return "Obsidian"
             case .codex: return "Codex"
             case .openCode: return "OpenCode"
             case .cursor: return "Cursor"
@@ -104,6 +106,11 @@ final class WorkspaceJumpManager {
         .terminal: ApplicationDescriptor(
             bundleIdentifier: "com.apple.Terminal",
             cliCandidates: [],
+            uriScheme: nil
+        ),
+        .obsidian: ApplicationDescriptor(
+            bundleIdentifier: "md.obsidian",
+            cliCandidates: ["obsidian"],
             uriScheme: nil
         ),
         .codex: ApplicationDescriptor(
@@ -192,7 +199,7 @@ final class WorkspaceJumpManager {
         if let sessionId,
            let nativeTarget = exactNativeTarget(for: session),
            isTargetAvailable(nativeTarget),
-           openNativeTarget(nativeTarget, sessionId: sessionId) {
+           openNativeTarget(nativeTarget, sessionId: sessionId, session: session) {
             return true
         }
 
@@ -264,6 +271,8 @@ final class WorkspaceJumpManager {
             return [.iTerm, .terminal, .ghostty, .warp, .finder]
         case "com.apple.terminal":
             return [.terminal, .ghostty, .iTerm, .warp, .finder]
+        case "md.obsidian":
+            return [.obsidian, .finder]
         case "com.openai.codex":
             return [.codex, .finder]
         case "ai.opencode.desktop":
@@ -324,6 +333,9 @@ final class WorkspaceJumpManager {
             return openInITerm(workspaceURL)
         case .terminal:
             return openInTerminal(workspaceURL)
+        case .obsidian:
+            return openInObsidian(sessionId: sessionId, vaultPath: workspaceURL.path)
+                || openWithApplication(workspaceURL, target: .obsidian)
         case .codex:
             return openInCodex(sessionId: sessionId) || openWithApplication(workspaceURL, target: .codex)
         case .openCode:
@@ -549,6 +561,8 @@ final class WorkspaceJumpManager {
 
     private func exactNativeTarget(for session: SessionSnapshot) -> JumpTarget? {
         switch session.termBundleId ?? "" {
+        case "md.obsidian":
+            return .obsidian
         case "com.openai.codex":
             return .codex
         case "ai.opencode.desktop":
@@ -558,8 +572,10 @@ final class WorkspaceJumpManager {
         }
     }
 
-    private func openNativeTarget(_ target: JumpTarget, sessionId: String) -> Bool {
+    private func openNativeTarget(_ target: JumpTarget, sessionId: String, session: SessionSnapshot) -> Bool {
         switch target {
+        case .obsidian:
+            return openInObsidian(sessionId: sessionId, vaultPath: session.cwd)
         case .codex:
             return openInCodex(sessionId: sessionId)
         case .openCode:
@@ -574,12 +590,112 @@ final class WorkspaceJumpManager {
         return workspace.open(url)
     }
 
+    private func openInObsidian(sessionId: String?, vaultPath: String?) -> Bool {
+        let didActivate = activateApplication(target: .obsidian)
+
+        guard let executable = cliExecutable(for: .obsidian),
+              let commandArguments = obsidianEvalArguments(sessionId: sessionId, vaultPath: vaultPath) else {
+            return didActivate
+        }
+
+        if runProcessAndWait(executable: executable, arguments: commandArguments) {
+            _ = activateApplication(target: .obsidian)
+            return true
+        }
+
+        return didActivate
+    }
+
     private func codexThreadURL(sessionId: String?) -> URL? {
         guard let sessionId else { return nil }
         let trimmed = sessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? trimmed
         return URL(string: "codex://threads/\(encoded)")
+    }
+
+    private func obsidianEvalArguments(sessionId: String?, vaultPath: String?) -> [String]? {
+        guard let escapedSessionId = javaScriptStringLiteral(sessionId),
+              let escapedViewType = javaScriptStringLiteral("claudian-view"),
+              let escapedPluginId = javaScriptStringLiteral("claudian") else {
+            return nil
+        }
+
+        let escapedVaultPath = javaScriptStringLiteral(vaultPath)
+        let vaultName = obsidianVaultName(for: vaultPath)
+
+        let code = """
+        (async () => {
+          const plugin = app?.plugins?.plugins?.[\(escapedPluginId)];
+          if (!plugin) {
+            return 'missing-plugin';
+          }
+
+          const sessionId = \(escapedSessionId);
+          const expectedVaultPath = \(escapedVaultPath ?? "null");
+          const currentVaultPath = app?.vault?.adapter?.basePath ?? null;
+          if (expectedVaultPath && currentVaultPath && expectedVaultPath !== currentVaultPath) {
+            return 'wrong-vault';
+          }
+
+          const conversations = (plugin.getConversationList?.() ?? [])
+            .map(meta => plugin.getConversationSync?.(meta.id))
+            .filter(Boolean);
+
+          const conversation = conversations.find(conv => {
+            const providerSessionId = conv?.providerState?.providerSessionId ?? null;
+            return conv?.id === sessionId || conv?.sessionId === sessionId || providerSessionId === sessionId;
+          }) ?? null;
+
+          await plugin.activateView?.();
+
+          const leaves = app.workspace.getLeavesOfType(\(escapedViewType));
+          if (conversation && leaves.length > 0) {
+            const view = leaves[0]?.view;
+            await view?.getTabManager?.()?.openConversation?.(conversation.id);
+          }
+
+          const notePath = conversation?.currentNote ?? null;
+          if (notePath) {
+            const file = app.vault.getFileByPath(notePath);
+            if (file) {
+              const mostRecentLeaf = app.workspace.getMostRecentLeaf?.();
+              const noteLeaf = mostRecentLeaf?.view?.getViewType?.() === \(escapedViewType)
+                ? app.workspace.getLeaf('tab')
+                : (mostRecentLeaf ?? app.workspace.getLeaf('tab'));
+              await noteLeaf?.openFile?.(file);
+            }
+          }
+
+          return notePath ?? (conversation ? 'conversation-opened' : 'view-opened');
+        })()
+        """
+
+        var arguments: [String] = []
+        if let vaultName, !vaultName.isEmpty {
+            arguments.append("vault=\(vaultName)")
+        }
+        arguments.append("eval")
+        arguments.append("code=\(code)")
+        return arguments
+    }
+
+    private func obsidianVaultName(for vaultPath: String?) -> String? {
+        guard let vaultPath else { return nil }
+        let trimmed = vaultPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return URL(fileURLWithPath: trimmed).lastPathComponent
+    }
+
+    private func javaScriptStringLiteral(_ value: String?) -> String? {
+        guard let value else { return nil }
+        guard let data = try? JSONSerialization.data(withJSONObject: [value], options: []),
+              var encoded = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        encoded.removeFirst()
+        encoded.removeLast()
+        return encoded
     }
 
     private func openWithApplication(_ url: URL, target: JumpTarget) -> Bool {

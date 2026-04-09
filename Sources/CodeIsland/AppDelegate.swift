@@ -62,6 +62,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             Self.log.error("Failed to repair usage monitor: \(error.localizedDescription)")
         }
+
+        let codexAutoSwitchManager = CodexAutoSwitchLaunchAgentManager()
+        do {
+            if try codexAutoSwitchManager.repairIfNeeded() {
+                Self.log.info("Repaired Codex auto-switch launch agent")
+            }
+        } catch {
+            Self.log.error("Failed to repair Codex auto-switch watcher: \(error.localizedDescription)")
+        }
         appState.refreshUsageSnapshot()
 
         appState.startSessionDiscovery()
@@ -215,8 +224,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         case .skipQuestion:
             appState.skipQuestion()
         case .jumpToTerminal:
-            if let id = appState.activeSessionId, let session = appState.sessions[id] {
-                SessionJumpRouter.jump(to: session, sessionId: id)
+            if let id = appState.activeSessionId {
+                appState.jumpToSession(id)
             }
         }
     }

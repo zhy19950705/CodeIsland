@@ -16,6 +16,8 @@ enum AutomationCLI {
             return CodexHookBridgeCommand(arguments: Array(commandArguments.dropFirst())).run()
         case "--monitor-usage":
             return UsageMonitorCommand(arguments: Array(commandArguments.dropFirst())).run()
+        case "--codex-auth":
+            return CodexAccountCLICommand(arguments: Array(commandArguments.dropFirst())).run()
         default:
             return nil
         }
@@ -217,6 +219,13 @@ private func resolveCmuxEnvironment(_ env: [String: String]) -> [String: String]
     }
 
     guard resolved["TERM_PROGRAM"] == "cmux" || resolved["__CFBundleIdentifier"] == "com.cmuxterm.app" else {
+        return resolved
+    }
+
+    // `cmux identify --json` can trigger TCC/WindowServer checks on newer macOS
+    // builds, which surfaces misleading screen-recording prompts. Prefer the
+    // environment cmux already injected unless the user explicitly opts in.
+    guard ProcessInfo.processInfo.environment["CODEISLAND_ENABLE_CMUX_IDENTIFY"] == "1" else {
         return resolved
     }
 
@@ -583,17 +592,7 @@ private struct UsageMonitorCommand {
     }
 
     private func loadCodexAccessToken() -> String? {
-        let authURL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".codex", isDirectory: true)
-            .appendingPathComponent("auth.json", isDirectory: false)
-        guard let data = try? Data(contentsOf: authURL),
-              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let tokens = payload["tokens"] as? [String: Any],
-              let accessToken = tokens["access_token"] as? String,
-              !accessToken.isEmpty else {
-            return nil
-        }
-        return accessToken
+        CodexAuthStore.load()?.accessToken
     }
 
     private func loadClaudeAccessToken() -> String? {

@@ -20,10 +20,12 @@ struct MascotView: View {
     let status: AgentStatus
     var size: CGFloat = 27
     @AppStorage(SettingsKey.mascotSpeed) private var speedPct = SettingsDefaults.mascotSpeed
+    @AppStorage(SettingsKey.mascotOverridesVersion) private var overridesVersion = 0
 
     var body: some View {
+        let mascotSource = MascotOverrides.effectiveSource(for: source)
         Group {
-            switch source {
+            switch mascotSource {
             case "codex":
                 DexView(status: status, size: size)
             case "gemini":

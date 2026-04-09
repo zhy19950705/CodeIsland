@@ -3,6 +3,28 @@ import XCTest
 @testable import CodeIsland
 
 final class ScreenDetectorTests: XCTestCase {
+    func testResolvedNotchWidthUsesOverrideWhenPresent() {
+        let width = ScreenDetector.resolvedNotchWidth(
+            screenWidth: 1512,
+            auxiliaryLeftWidth: 600,
+            auxiliaryRightWidth: 600,
+            override: 244
+        )
+
+        XCTAssertEqual(width, 244)
+    }
+
+    func testResolvedNotchWidthFallsBackToSimulatedWidthWithoutAuxiliaryAreas() {
+        let width = ScreenDetector.resolvedNotchWidth(
+            screenWidth: 1728,
+            auxiliaryLeftWidth: nil,
+            auxiliaryRightWidth: nil,
+            override: nil
+        )
+
+        XCTAssertEqual(width, 240, accuracy: 0.001)
+    }
+
     func testAutoPreferredIndexUsesActiveWorkScreenBeforeBuiltInScreen() {
         let candidates = [
             ScreenDetector.Candidate(

@@ -496,7 +496,8 @@ private struct UsageMonitorCommand {
                         tintHex: tintHex(forUsedPercentage: secondaryUsed)
                     ),
                     updatedAtUnix: now,
-                    summary: nil
+                    summary: nil,
+                    monthly: nil
                 )
             )
         }
@@ -504,6 +505,7 @@ private struct UsageMonitorCommand {
         if providers.contains("codex"), let quota = fetchCodexQuota() {
             let primaryRemaining = clampPercentage(100 - quota.primary.usedPercent)
             let secondaryRemaining = clampPercentage(100 - quota.secondary.usedPercent)
+            let monthlyUsage = CodexMonthlyUsageCalculator.loadCurrentMonth()
             snapshots.append(
                 UsageProviderSnapshot(
                     source: .codex,
@@ -520,7 +522,8 @@ private struct UsageMonitorCommand {
                         tintHex: tintHex(forRemainingPercentage: secondaryRemaining)
                     ),
                     updatedAtUnix: now,
-                    summary: quota.summary
+                    summary: quota.summary,
+                    monthly: monthlyUsage
                 )
             )
         }
@@ -544,8 +547,8 @@ private struct UsageMonitorCommand {
         }
 
         return (
-            ClaudeWindow(utilization: doubleValue(fiveHour["utilization"]), resetAt: parseTimestamp(fiveHour["resets_at"])),
-            ClaudeWindow(utilization: doubleValue(sevenDay["utilization"]), resetAt: parseTimestamp(sevenDay["resets_at"]))
+            ClaudeWindow(utilization: normalizedClaudeUtilization(fiveHour["utilization"]), resetAt: parseTimestamp(fiveHour["resets_at"])),
+            ClaudeWindow(utilization: normalizedClaudeUtilization(sevenDay["utilization"]), resetAt: parseTimestamp(sevenDay["resets_at"]))
         )
     }
 
@@ -710,7 +713,16 @@ private struct UsageMonitorCommand {
         if stringValue.hasSuffix("Z") {
             stringValue = String(stringValue.dropLast()) + "+00:00"
         }
-        return ISO8601DateFormatter().date(from: stringValue)?.timeIntervalSince1970
+
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: stringValue) {
+            return date.timeIntervalSince1970
+        }
+
+        let standard = ISO8601DateFormatter()
+        standard.formatOptions = [.withInternetDateTime]
+        return standard.date(from: stringValue)?.timeIntervalSince1970
     }
 
     private func integerValue(_ raw: Any?) -> Int {
@@ -723,6 +735,12 @@ private struct UsageMonitorCommand {
         if let value = raw as? NSNumber { return value.doubleValue }
         if let stringValue = raw as? String, let value = Double(stringValue) { return value }
         return 0
+    }
+
+    private func normalizedClaudeUtilization(_ raw: Any?) -> Double {
+        let value = doubleValue(raw)
+        guard value > 1 else { return value }
+        return value / 100
     }
 
     private func clampPercentage(_ value: Int) -> Int {

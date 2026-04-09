@@ -38,11 +38,14 @@ final class WorkspaceJumpManager {
         case codex
         case openCode
         case cursor
+        case trae
         case qoder
         case codeBuddy
         case factory
         case windsurf
         case visualStudioCode
+        case visualStudioCodeInsiders
+        case vscodium
         case finder
 
         var title: String {
@@ -55,11 +58,14 @@ final class WorkspaceJumpManager {
             case .codex: return "Codex"
             case .openCode: return "OpenCode"
             case .cursor: return "Cursor"
+            case .trae: return "Trae"
             case .qoder: return "Qoder"
             case .codeBuddy: return "CodeBuddy"
             case .factory: return "Factory"
             case .windsurf: return "Windsurf"
             case .visualStudioCode: return "VS Code"
+            case .visualStudioCodeInsiders: return "VS Code Insiders"
+            case .vscodium: return "VSCodium"
             case .finder: return "Finder"
             }
         }
@@ -119,6 +125,13 @@ final class WorkspaceJumpManager {
             ],
             uriScheme: "cursor"
         ),
+        .trae: ApplicationDescriptor(
+            bundleIdentifier: "com.trae.app",
+            cliCandidates: [
+                "trae",
+            ],
+            uriScheme: "trae"
+        ),
         .qoder: ApplicationDescriptor(
             bundleIdentifier: "com.qoder.ide",
             cliCandidates: ["qoder"],
@@ -150,6 +163,22 @@ final class WorkspaceJumpManager {
                 "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
             ],
             uriScheme: "vscode"
+        ),
+        .visualStudioCodeInsiders: ApplicationDescriptor(
+            bundleIdentifier: "com.microsoft.VSCodeInsiders",
+            cliCandidates: [
+                "code-insiders",
+                "/Applications/Visual Studio Code - Insiders.app/Contents/Resources/app/bin/code-insiders",
+            ],
+            uriScheme: "vscode-insiders"
+        ),
+        .vscodium: ApplicationDescriptor(
+            bundleIdentifier: "com.vscodium",
+            cliCandidates: [
+                "codium",
+                "/Applications/VSCodium.app/Contents/Resources/app/bin/codium",
+            ],
+            uriScheme: "vscodium"
         ),
     ]
 
@@ -190,35 +219,9 @@ final class WorkspaceJumpManager {
     }
 
     private func fallbackChain(for session: SessionSnapshot) -> [JumpTarget] {
-        if let bundleId = session.termBundleId {
-            switch bundleId {
-            case "com.cmuxterm.app":
-                return [.cmux, .ghostty, .warp, .iTerm, .terminal, .finder]
-            case "com.mitchellh.ghostty":
-                return [.ghostty, .warp, .iTerm, .terminal, .finder]
-            case "dev.warp.Warp-Stable":
-                return [.warp, .ghostty, .iTerm, .terminal, .finder]
-            case "com.googlecode.iterm2":
-                return [.iTerm, .terminal, .ghostty, .warp, .finder]
-            case "com.apple.Terminal":
-                return [.terminal, .ghostty, .iTerm, .warp, .finder]
-            case "com.openai.codex":
-                return [.codex, .finder]
-            case "ai.opencode.desktop":
-                return [.openCode, .finder]
-            case "com.todesktop.230313mzl4w4u92":
-                return [.cursor, .visualStudioCode, .windsurf, .ghostty, .warp, .iTerm, .terminal, .finder]
-            case "com.qoder.ide":
-                return [.qoder, .cursor, .visualStudioCode, .windsurf, .ghostty, .warp, .iTerm, .terminal, .finder]
-            case "com.tencent.codebuddy":
-                return [.codeBuddy, .cursor, .visualStudioCode, .windsurf, .ghostty, .warp, .iTerm, .terminal, .finder]
-            case "com.factory.app":
-                return [.factory, .cursor, .visualStudioCode, .windsurf, .ghostty, .warp, .iTerm, .terminal, .finder]
-            case "com.exafunction.windsurf":
-                return [.windsurf, .cursor, .visualStudioCode, .ghostty, .warp, .iTerm, .terminal, .finder]
-            default:
-                break
-            }
+        if let bundleId = session.termBundleId,
+           let hostChain = hostFallbackChain(for: bundleId) {
+            return hostChain
         }
 
         switch session.source {
@@ -242,6 +245,73 @@ final class WorkspaceJumpManager {
         }
     }
 
+    func fallbackTitles(for session: SessionSnapshot) -> [String] {
+        fallbackChain(for: session).map(\.title)
+    }
+
+    private func hostFallbackChain(for bundleIdentifier: String) -> [JumpTarget]? {
+        let normalized = bundleIdentifier.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalized.isEmpty else { return nil }
+
+        switch normalized {
+        case "com.cmuxterm.app":
+            return [.cmux, .ghostty, .warp, .iTerm, .terminal, .finder]
+        case "com.mitchellh.ghostty":
+            return [.ghostty, .warp, .iTerm, .terminal, .finder]
+        case "dev.warp.warp-stable":
+            return [.warp, .ghostty, .iTerm, .terminal, .finder]
+        case "com.googlecode.iterm2":
+            return [.iTerm, .terminal, .ghostty, .warp, .finder]
+        case "com.apple.terminal":
+            return [.terminal, .ghostty, .iTerm, .warp, .finder]
+        case "com.openai.codex":
+            return [.codex, .finder]
+        case "ai.opencode.desktop":
+            return [.openCode, .finder]
+        case "com.todesktop.230313mzl4w4u92":
+            return [.cursor, .visualStudioCode, .windsurf, .ghostty, .warp, .iTerm, .terminal, .finder]
+        case "com.trae.app":
+            return [.trae, .visualStudioCode, .cursor, .windsurf, .finder]
+        case "com.qoder.ide":
+            return [.qoder, .cursor, .visualStudioCode, .windsurf, .ghostty, .warp, .iTerm, .terminal, .finder]
+        case "com.tencent.codebuddy":
+            return [.codeBuddy, .cursor, .visualStudioCode, .windsurf, .ghostty, .warp, .iTerm, .terminal, .finder]
+        case "com.factory.app":
+            return [.factory, .cursor, .visualStudioCode, .windsurf, .ghostty, .warp, .iTerm, .terminal, .finder]
+        case "com.exafunction.windsurf":
+            return [.windsurf, .cursor, .visualStudioCode, .ghostty, .warp, .iTerm, .terminal, .finder]
+        case "com.microsoft.vscode":
+            return [.visualStudioCode, .cursor, .windsurf, .finder]
+        case "com.microsoft.vscodeinsiders":
+            return [.visualStudioCodeInsiders, .visualStudioCode, .cursor, .windsurf, .finder]
+        case "com.vscodium":
+            return [.vscodium, .visualStudioCode, .cursor, .windsurf, .finder]
+        default:
+            break
+        }
+
+        if normalized.contains("vscode") {
+            return [.visualStudioCode, .cursor, .windsurf, .finder]
+        }
+        if normalized.contains("vscodium") {
+            return [.vscodium, .visualStudioCode, .cursor, .windsurf, .finder]
+        }
+        if normalized.contains("trae") {
+            return [.trae, .visualStudioCode, .cursor, .windsurf, .finder]
+        }
+        if normalized.contains("jetbrains")
+            || normalized.contains("zed")
+            || normalized.contains("xcode")
+            || normalized == "com.apple.dt.xcode"
+            || normalized.contains("panic.nova")
+            || normalized.contains("android.studio")
+            || normalized.contains("antigravity") {
+            return [.finder]
+        }
+
+        return nil
+    }
+
     private func open(_ workspaceURL: URL, using target: JumpTarget, sessionId: String?, session: SessionSnapshot) -> Bool {
         switch target {
         case .cmux:
@@ -258,7 +328,7 @@ final class WorkspaceJumpManager {
             return openInCodex(sessionId: sessionId) || openWithApplication(workspaceURL, target: .codex)
         case .openCode:
             return openWithApplication(workspaceURL, target: .openCode)
-        case .cursor, .qoder, .codeBuddy, .windsurf, .visualStudioCode:
+        case .cursor, .trae, .qoder, .codeBuddy, .windsurf, .visualStudioCode, .visualStudioCodeInsiders, .vscodium:
             return openInCodeCompatibleEditor(workspaceURL, target: target, sessionId: sessionId)
         case .factory:
             return openWithApplication(workspaceURL, target: .factory)

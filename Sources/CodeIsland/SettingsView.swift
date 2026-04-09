@@ -5,6 +5,7 @@ import CodeIslandCore
 
 enum SettingsPage: String, Identifiable, Hashable {
     case general
+    case ai
     case behavior
     case appearance
     case mascots
@@ -19,6 +20,7 @@ enum SettingsPage: String, Identifiable, Hashable {
     var icon: String {
         switch self {
         case .general: return "gearshape.fill"
+        case .ai: return "sparkles"
         case .behavior: return "slider.horizontal.3"
         case .appearance: return "paintbrush.fill"
         case .mascots: return "person.2.fill"
@@ -33,6 +35,7 @@ enum SettingsPage: String, Identifiable, Hashable {
     var color: Color {
         switch self {
         case .general: return .gray
+        case .ai: return .mint
         case .behavior: return .orange
         case .appearance: return .blue
         case .mascots: return .pink
@@ -51,7 +54,7 @@ private struct SidebarGroup: Hashable {
 }
 
 private let sidebarGroups: [SidebarGroup] = [
-    SidebarGroup(title: nil, pages: [.general, .behavior, .appearance, .mascots, .sound, .shortcuts]),
+    SidebarGroup(title: nil, pages: [.general, .ai, .behavior, .appearance, .mascots, .sound, .shortcuts]),
     SidebarGroup(title: "CodeIsland", pages: [.testing, .hooks, .about]),
 ]
 
@@ -67,51 +70,41 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    ForEach(sidebarGroups, id: \.title) { group in
-                        VStack(alignment: .leading, spacing: 6) {
-                            if let title = group.title {
-                                Text(title)
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .foregroundStyle(.secondary)
-                                    .padding(.horizontal, 8)
-                                    .padding(.bottom, 2)
-                            }
-
-                            ForEach(group.pages) { page in
-                                Button {
-                                    selectedPage = page
-                                } label: {
-                                    SidebarRow(page: page, isSelected: selectedPage == page)
-                                }
-                                .buttonStyle(.plain)
-                            }
+        NavigationSplitView {
+            List(selection: $selectedPage) {
+                ForEach(sidebarGroups, id: \.title) { group in
+                    Section {
+                        ForEach(group.pages) { page in
+                            SidebarRow(page: page, isSelected: selectedPage == page)
+                                .tag(page)
+                        }
+                    } header: {
+                        if let title = group.title {
+                            Text(title)
                         }
                     }
                 }
             }
-            .frame(minWidth: 208, idealWidth: 208, maxWidth: 208, maxHeight: .infinity, alignment: .topLeading)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 14)
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(min: 220, ideal: 220, max: 240)
 
-            Divider()
-
-            Group {
+        } detail: {
+            ZStack(alignment: .topLeading) {
                 switch selectedPage {
                 case .general: GeneralPage()
+                case .ai: AIPage()
                 case .behavior: BehaviorPage()
                 case .appearance: AppearancePage()
                 case .mascots: MascotsPage()
                 case .sound: SoundPage()
                 case .shortcuts: ShortcutsPage()
                 case .testing: TestingPage(appState: appState)
-                case .hooks: HooksPage()
+                case .hooks: HooksPage(appState: appState)
                 case .about: AboutPage()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(Color(nsColor: .windowBackgroundColor))
         }
         .frame(minWidth: 560, maxWidth: .infinity, minHeight: 420, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(nsColor: .windowBackgroundColor))
@@ -158,11 +151,7 @@ private struct SidebarRow: View {
     let isSelected: Bool
 
     var body: some View {
-        Label {
-            Text(l10n[page.rawValue])
-                .font(.system(size: 13))
-                .padding(.leading, 2)
-        } icon: {
+        HStack(spacing: 10) {
             ZStack {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(page.color.gradient)
@@ -171,15 +160,18 @@ private struct SidebarRow: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.white)
             }
+
+            Text(l10n[page.rawValue])
+                .font(.system(size: 13))
+
+            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isSelected ? Color.accentColor.opacity(0.16) : .clear)
-        )
+        .padding(.vertical, 4)
         .contentShape(Rectangle())
+        .listRowBackground(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isSelected ? Color.accentColor.opacity(0.14) : .clear)
+        )
     }
 }
 
@@ -187,18 +179,15 @@ private struct SidebarRow: View {
 
 private struct GeneralPage: View {
     @ObservedObject private var l10n = L10n.shared
-    @AppStorage(SettingsKey.displayChoice) private var displayChoice = SettingsDefaults.displayChoice
+    @StateObject private var screenSelector = ScreenSelector.shared
     @AppStorage(SettingsKey.allowHorizontalDrag) private var allowHorizontalDrag = SettingsDefaults.allowHorizontalDrag
+    @AppStorage(SettingsKey.menuBarShowDetail) private var menuBarShowDetail = SettingsDefaults.menuBarShowDetail
     @State private var launchAtLogin: Bool
-    @State private var usageSnapshot: UsageSnapshot = UsageSnapshotStore.load()
-    @State private var usageMonitorSnapshot = UsageMonitorLaunchAgentManager().snapshot()
-    @State private var usageStatusMessage = ""
-    @State private var usageStatusIsError = false
-
-    private let usageMonitorManager = UsageMonitorLaunchAgentManager()
+    @State private var displayMode: DisplayMode
 
     init() {
         _launchAtLogin = State(initialValue: SettingsManager.shared.launchAtLogin)
+        _displayMode = State(initialValue: SettingsManager.shared.displayMode)
     }
 
     var body: some View {
@@ -222,17 +211,120 @@ private struct GeneralPage: View {
                 Text(l10n["allow_horizontal_drag_desc"])
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Picker(l10n["display"], selection: $displayChoice) {
+                Picker(l10n["display_mode"], selection: $displayMode) {
+                    Text(l10n["display_mode_auto"]).tag(DisplayMode.auto)
+                    Text(l10n["display_mode_notch"]).tag(DisplayMode.notch)
+                    Text(l10n["display_mode_menu_bar"]).tag(DisplayMode.menuBar)
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: displayMode) { _, newValue in
+                    SettingsManager.shared.displayMode = newValue
+                }
+                if resolvedDisplayMode == .menuBar {
+                    Toggle(l10n["menu_bar_show_detail"], isOn: $menuBarShowDetail)
+                    Text(menuBarShortcutHint)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Picker(l10n["display"], selection: displaySelection) {
                     Text(l10n["auto"]).tag("auto")
-                    ForEach(Array(NSScreen.screens.enumerated()), id: \.offset) { index, screen in
-                        let name = screen.localizedName
-                        let isBuiltin = name.contains("Built-in") || name.contains("内置")
-                        let label = isBuiltin ? l10n["builtin_display"] : name
-                        Text(label).tag("screen_\(index)")
+                    ForEach(Array(screenSelector.availableScreens.enumerated()), id: \.offset) { index, screen in
+                        Text(displayLabel(for: screen)).tag(screenOptionID(for: screen, index: index))
                     }
                 }
             }
 
+        }
+        .formStyle(.grouped)
+        .onAppear {
+            screenSelector.refreshScreens()
+        }
+    }
+
+    private var displaySelection: Binding<String> {
+        Binding(
+            get: {
+                switch screenSelector.selectionMode {
+                case .automatic:
+                    return "auto"
+                case .specificScreen:
+                    guard let selectedScreen = screenSelector.selectedScreen,
+                          let match = Array(screenSelector.availableScreens.enumerated()).first(where: {
+                              screenSelector.isSelected($0.element)
+                          }) else {
+                        return "auto"
+                    }
+                    return screenOptionID(for: selectedScreen, index: match.offset)
+                }
+            },
+            set: { selection in
+                if selection == "auto" {
+                    screenSelector.selectAutomatic()
+                    return
+                }
+
+                guard let match = Array(screenSelector.availableScreens.enumerated()).first(where: {
+                    screenOptionID(for: $0.element, index: $0.offset) == selection
+                }) else {
+                    screenSelector.selectAutomatic()
+                    return
+                }
+
+                screenSelector.selectScreen(match.element)
+            }
+        )
+    }
+
+    private var resolvedDisplayMode: DisplayMode {
+        let screen = screenSelector.selectedScreen ?? ScreenDetector.preferredScreen
+        return DisplayModeCoordinator.resolveMode(
+            displayMode,
+            hasPhysicalNotch: ScreenDetector.screenHasNotch(screen),
+            screenCount: max(screenSelector.availableScreens.count, 1)
+        )
+    }
+
+    private var menuBarShortcutHint: String {
+        let shortcut = ShortcutAction.togglePanel.defaultBinding?.displayString ?? "⌘⇧I"
+        return "\(l10n["menu_bar_shortcut_hint_prefix"]) \(shortcut). \(l10n["menu_bar_shortcut_hint_suffix"])"
+    }
+
+    private func displayLabel(for screen: NSScreen) -> String {
+        let baseLabel = screen.isBuiltinDisplay ? l10n["builtin_display"] : screen.localizedName
+        var suffixes: [String] = []
+
+        if screen == NSScreen.main {
+            suffixes.append(l10n["main_display"])
+        }
+        if ScreenDetector.screenHasNotch(screen) {
+            suffixes.append(l10n["notch"])
+        }
+
+        guard !suffixes.isEmpty else { return baseLabel }
+        return ([baseLabel] + suffixes).joined(separator: " ")
+    }
+
+    private func screenOptionID(for screen: NSScreen, index: Int) -> String {
+        if let displayID = screen.displayID {
+            return "screen-\(displayID)"
+        }
+        return "screen-\(screen.localizedName)-\(index)"
+    }
+}
+
+// MARK: - AI Page
+
+private struct AIPage: View {
+    @ObservedObject private var l10n = L10n.shared
+    @State private var usageSnapshot: UsageSnapshot = UsageSnapshotStore.load()
+    @State private var usageMonitorSnapshot = UsageMonitorLaunchAgentManager().snapshot()
+    @State private var usageStatusMessage = ""
+    @State private var usageStatusIsError = false
+
+    private let usageMonitorManager = UsageMonitorLaunchAgentManager()
+
+    var body: some View {
+        Form {
             Section(l10n["usage_monitor_section"]) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(l10n["usage_monitor"])
@@ -489,21 +581,115 @@ private struct TestingPage: View {
 
 private struct HooksPage: View {
     @ObservedObject private var l10n = L10n.shared
+    let appState: AppState?
     @State private var cliSnapshots: [CLIIntegrationSnapshot] = []
     @State private var editorSnapshots: [EditorBridgeSnapshot] = []
     @State private var statusMessage = ""
     @State private var statusIsError = false
     @State private var refreshKey = UUID()
+    @State private var isExportingDiagnostics = false
 
     private let cliIntegrationManager = CLIIntegrationManager()
     private let editorBridgeManager = EditorBridgeManager()
 
+    private var enabledHealthyCount: Int {
+        cliSnapshots.filter { snapshot in
+            ConfigInstaller.isEnabled(source: snapshot.integration.rawValue) && snapshot.state == .active
+        }.count
+    }
+
+    private var enabledNeedsRepairCount: Int {
+        cliSnapshots.filter { snapshot in
+            ConfigInstaller.isEnabled(source: snapshot.integration.rawValue) && snapshot.state != .active
+        }.count
+    }
+
+    private var disabledCount: Int {
+        cliSnapshots.filter { snapshot in
+            !ConfigInstaller.isEnabled(source: snapshot.integration.rawValue)
+        }.count
+    }
+
     var body: some View {
         Form {
+            Section(l10n["hooks_health"]) {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: enabledNeedsRepairCount == 0 ? "checkmark.shield.fill" : "exclamationmark.triangle.fill")
+                        .font(.system(size: 20))
+                        .foregroundStyle(enabledNeedsRepairCount == 0 ? .green : .orange)
+                        .frame(width: 24)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(enabledNeedsRepairCount == 0 ? l10n["hooks_health_ok"] : "\(enabledNeedsRepairCount) \(l10n["hooks_health_attention"])")
+                            .font(.headline)
+                        Text("\(l10n["hooks_health_enabled_active"]): \(enabledHealthyCount)")
+                            .foregroundStyle(.secondary)
+                        Text("\(l10n["hooks_health_enabled_issues"]): \(enabledNeedsRepairCount)")
+                            .foregroundStyle(enabledNeedsRepairCount == 0 ? Color.secondary : .orange)
+                        Text("\(l10n["hooks_health_disabled"]): \(disabledCount)")
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+
+                HStack(spacing: 8) {
+                    Button {
+                        let repaired = ConfigInstaller.verifyAndRepair()
+                        refreshDiagnostics()
+                        if repaired.isEmpty {
+                            statusMessage = enabledNeedsRepairCount == 0
+                                ? l10n["hooks_repair_not_needed"]
+                                : l10n["install_failed"]
+                            statusIsError = enabledNeedsRepairCount != 0
+                        } else {
+                            statusMessage = "\(l10n["hooks_repaired"]): \(repaired.joined(separator: ", "))"
+                            statusIsError = false
+                        }
+                    } label: {
+                        Text(l10n["hooks_repair"])
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button {
+                        refreshDiagnostics()
+                    } label: {
+                        Text(l10n["hooks_refresh_status"])
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+
             Section(l10n["editor_bridges"]) {
                 ForEach(editorSnapshots) { snapshot in
                     EditorBridgeRow(snapshot: snapshot) {
                         editorBridgeManager.openInstallLocation(for: snapshot.host)
+                    } onInstallExtension: {
+                        do {
+                            try IDEExtensionInstaller.install(snapshot.host.extensionHost)
+                            refreshDiagnostics()
+                            statusMessage = "\(snapshot.host.title) \(l10n["editor_extension_installed"].lowercased())"
+                            statusIsError = false
+                        } catch {
+                            statusMessage = error.localizedDescription
+                            statusIsError = true
+                        }
+                    } onReinstallExtension: {
+                        do {
+                            try IDEExtensionInstaller.reinstall(snapshot.host.extensionHost)
+                            refreshDiagnostics()
+                            statusMessage = "\(snapshot.host.title) \(l10n["reinstall_extension"].lowercased())"
+                            statusIsError = false
+                        } catch {
+                            statusMessage = error.localizedDescription
+                            statusIsError = true
+                        }
+                    } onUninstallExtension: {
+                        IDEExtensionInstaller.uninstall(snapshot.host.extensionHost)
+                        refreshDiagnostics()
+                        statusMessage = "\(snapshot.host.title) \(l10n["uninstall_extension"].lowercased())"
+                        statusIsError = false
                     }
                 }
             }
@@ -571,6 +757,26 @@ private struct HooksPage: View {
                     }
                 }
             }
+
+            Section("Diagnostics") {
+                Button {
+                    exportDiagnostics()
+                } label: {
+                    HStack {
+                        Text("Export diagnostics archive")
+                        Spacer()
+                        if isExportingDiagnostics {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                    }
+                }
+                .disabled(isExportingDiagnostics || appState == nil)
+
+                Text("Bundles live session state, hook configs, usage cache, macOS info, and recent CodeIsland logs into a zip archive.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .onAppear { refreshDiagnostics() }
@@ -581,12 +787,55 @@ private struct HooksPage: View {
         editorSnapshots = editorBridgeManager.snapshots()
         refreshKey = UUID()
     }
+
+    private func exportDiagnostics() {
+        guard let appState else { return }
+
+        let panel = NSSavePanel()
+        panel.title = "Export CodeIsland Diagnostics"
+        panel.nameFieldStringValue = "CodeIsland-Diagnostics.zip"
+        panel.allowedContentTypes = [.zip]
+        panel.canCreateDirectories = true
+
+        guard panel.runModal() == .OK, let destinationURL = panel.url else { return }
+
+        isExportingDiagnostics = true
+        statusMessage = ""
+        statusIsError = false
+
+        let snapshot = appState.diagnosticsSnapshot()
+        Task {
+            do {
+                let result = try await DiagnosticsExporter.shared.exportArchive(
+                    snapshot: snapshot,
+                    to: destinationURL
+                )
+                await MainActor.run {
+                    isExportingDiagnostics = false
+                    statusIsError = false
+                    statusMessage = result.warnings.isEmpty
+                        ? "Diagnostics exported to \(result.archiveURL.path)"
+                        : "Diagnostics exported with \(result.warnings.count) warning(s): \(result.archiveURL.path)"
+                    NSWorkspace.shared.activateFileViewerSelecting([result.archiveURL])
+                }
+            } catch {
+                await MainActor.run {
+                    isExportingDiagnostics = false
+                    statusIsError = true
+                    statusMessage = error.localizedDescription
+                }
+            }
+        }
+    }
 }
 
 private struct EditorBridgeRow: View {
     @ObservedObject private var l10n = L10n.shared
     let snapshot: EditorBridgeSnapshot
     let onOpen: () -> Void
+    let onInstallExtension: () -> Void
+    let onReinstallExtension: () -> Void
+    let onUninstallExtension: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -599,6 +848,9 @@ private struct EditorBridgeRow: View {
                     Text(l10n[snapshot.state.detailKey])
                         .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
+                    Text(snapshot.extensionInstalled ? l10n["editor_extension_installed"] : l10n["editor_extension_missing"])
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(snapshot.extensionInstalled ? .green : .orange)
                     if let installPath = snapshot.installPath {
                         Text(installPath)
                             .font(.system(size: 11, design: .monospaced))
@@ -612,6 +864,22 @@ private struct EditorBridgeRow: View {
                 if snapshot.state != .unavailable {
                     Button(l10n["open_app"]) {
                         onOpen()
+                    }
+                    .buttonStyle(.link)
+                }
+                if snapshot.extensionInstalled {
+                    Button(l10n["reinstall_extension"]) {
+                        onReinstallExtension()
+                    }
+                    .buttonStyle(.link)
+
+                    Button(l10n["uninstall_extension"]) {
+                        onUninstallExtension()
+                    }
+                    .buttonStyle(.link)
+                } else if snapshot.state != .unavailable {
+                    Button(l10n["install_extension"]) {
+                        onInstallExtension()
                     }
                     .buttonStyle(.link)
                 }
@@ -731,6 +999,11 @@ private struct UsageProviderRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            if let monthly = provider.monthly {
+                Text(monthlySummary(monthly))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(.vertical, 2)
     }
@@ -761,18 +1034,71 @@ private struct UsageProviderRow: View {
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: Date(timeIntervalSince1970: unix), relativeTo: Date())
     }
+
+    private func monthlySummary(_ monthly: UsageMonthlyStat) -> String {
+        let tokens = tokenSummary(monthly.totalTokens)
+        if let costUSD = monthly.costUSD {
+            return "\(l10n["usage_this_month"]) · \(monthly.label) · \(tokens) · \(formatCurrency(costUSD))"
+        }
+        return "\(l10n["usage_this_month"]) · \(monthly.label) · \(tokens)"
+    }
+
+    private func tokenSummary(_ totalTokens: Int) -> String {
+        let value = Double(totalTokens)
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = 1
+        formatter.minimumFractionDigits = 0
+
+        if value >= 1_000_000 {
+            let number = formatter.string(from: NSNumber(value: value / 1_000_000)) ?? "0"
+            return "\(number)M \(l10n["usage_tokens"])"
+        }
+        if value >= 1_000 {
+            let number = formatter.string(from: NSNumber(value: value / 1_000)) ?? "0"
+            return "\(number)K \(l10n["usage_tokens"])"
+        }
+        let number = formatter.string(from: NSNumber(value: totalTokens)) ?? "\(totalTokens)"
+        return "\(number) \(l10n["usage_tokens"])"
+    }
+
+    private func formatCurrency(_ amount: Double) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = "USD"
+        formatter.maximumFractionDigits = 2
+        formatter.minimumFractionDigits = 2
+        return formatter.string(from: NSNumber(value: amount)) ?? String(format: "$%.2f", amount)
+    }
 }
 
 // MARK: - Appearance Page
 
 private struct AppearancePage: View {
     @ObservedObject private var l10n = L10n.shared
+    @AppStorage(SettingsKey.notchWidthOverride) private var notchWidthOverride = SettingsDefaults.notchWidthOverride
     @AppStorage(SettingsKey.maxVisibleSessions) private var maxVisibleSessions = SettingsDefaults.maxVisibleSessions
     @AppStorage(SettingsKey.sessionGroupingMode) private var sessionGroupingMode = SettingsDefaults.sessionGroupingMode
     @AppStorage(SettingsKey.contentFontSize) private var contentFontSize = SettingsDefaults.contentFontSize
     @AppStorage(SettingsKey.aiMessageLines) private var aiMessageLines = SettingsDefaults.aiMessageLines
     @AppStorage(SettingsKey.showAgentDetails) private var showAgentDetails = SettingsDefaults.showAgentDetails
     @AppStorage(SettingsKey.showToolStatus) private var showToolStatus = SettingsDefaults.showToolStatus
+
+    private var customNotchWidthEnabled: Binding<Bool> {
+        Binding(
+            get: { notchWidthOverride > 0 },
+            set: { enabled in
+                if enabled {
+                    notchWidthOverride = max(
+                        ScreenDetector.defaultManualNotchWidth(),
+                        120
+                    )
+                } else {
+                    notchWidthOverride = 0
+                }
+            }
+        )
+    }
 
     var body: some View {
         Form {
@@ -785,6 +1111,28 @@ private struct AppearancePage: View {
             }
 
             Section(l10n["panel"]) {
+                Toggle(l10n["custom_notch_width"], isOn: customNotchWidthEnabled)
+                if notchWidthOverride > 0 {
+                    HStack {
+                        Text(l10n["notch_width"])
+                        Spacer()
+                        Text("\(notchWidthOverride) pt")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    Slider(
+                        value: Binding(
+                            get: { Double(notchWidthOverride) },
+                            set: { notchWidthOverride = Int($0) }
+                        ),
+                        in: 120...360,
+                        step: 1
+                    )
+                }
+                Text(l10n["notch_width_desc"])
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 Picker(selection: $maxVisibleSessions) {
                     Text("3").tag(3)
                     Text("5").tag(5)
@@ -921,6 +1269,9 @@ private struct MascotsPage: View {
     @ObservedObject private var l10n = L10n.shared
     @State private var previewStatus: AgentStatus = .processing
     @AppStorage(SettingsKey.mascotSpeed) private var mascotSpeed = SettingsDefaults.mascotSpeed
+    @AppStorage(SettingsKey.mascotOverridesVersion) private var mascotOverridesVersion = 0
+
+    private let automaticSelection = "__auto__"
 
     private let mascotList: [(name: String, source: String, desc: String, color: Color)] = [
         ("Clawd", "claude", "Claude Code", Color(red: 0.871, green: 0.533, blue: 0.427)),
@@ -960,6 +1311,22 @@ private struct MascotsPage: View {
             }
 
             Section {
+                HStack {
+                    Text("Per-client mascot override")
+                    Spacer()
+                    Text("\(MascotOverrides.customizedCount()) customized")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                }
+
+                if MascotOverrides.customizedCount() > 0 {
+                    Button("Reset all mascot overrides", role: .destructive) {
+                        MascotOverrides.resetAll()
+                    }
+                }
+            }
+
+            Section {
                 ForEach(mascotList, id: \.source) { mascot in
                     MascotRow(
                         name: mascot.name,
@@ -981,32 +1348,92 @@ private struct MascotRow: View {
     let desc: String
     let color: Color
     let status: AgentStatus
+    @AppStorage(SettingsKey.mascotOverridesVersion) private var mascotOverridesVersion = 0
+
+    private let automaticSelection = "__auto__"
+
+    private var selection: Binding<String> {
+        Binding(
+            get: { MascotOverrides.override(for: source) ?? automaticSelection },
+            set: { newValue in
+                let override = newValue == automaticSelection ? nil : newValue
+                MascotOverrides.setOverride(override, for: source)
+            }
+        )
+    }
+
+    private var effectiveSource: String {
+        MascotOverrides.effectiveSource(for: source)
+    }
+
+    private var isCustomized: Bool {
+        MascotOverrides.override(for: source) != nil
+    }
 
     var body: some View {
-        HStack(spacing: 16) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.black)
-                    .frame(width: 56, height: 56)
-                MascotView(source: source, status: status, size: 40)
-            }
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 16) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.black)
+                        .frame(width: 56, height: 56)
+                    MascotView(source: source, status: status, size: 40)
+                }
 
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Text(name)
-                        .font(.system(size: 14, weight: .bold, design: .monospaced))
-                    if let icon = cliIcon(source: source, size: 16) {
-                        Image(nsImage: icon)
-                            .resizable()
-                            .frame(width: 16, height: 16)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text(name)
+                            .font(.system(size: 14, weight: .bold, design: .monospaced))
+                        if let icon = cliIcon(source: source, size: 16) {
+                            Image(nsImage: icon)
+                                .resizable()
+                                .frame(width: 16, height: 16)
+                        }
+                        if isCustomized {
+                            Text("custom")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.orange)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(
+                                    Capsule(style: .continuous)
+                                        .fill(Color.orange.opacity(0.12))
+                                )
+                        }
+                    }
+                    Text(desc)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+
+                    if effectiveSource != source {
+                        Text("Using \(effectiveSource.capitalized) mascot")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
                     }
                 }
-                Text(desc)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+
+                Spacer()
             }
 
-            Spacer()
+            Picker("Mascot", selection: selection) {
+                Text("Follow default").tag(automaticSelection)
+                Text("Clawd").tag("claude")
+                Text("Dex").tag("codex")
+                Text("Gemini").tag("gemini")
+                Text("CursorBot").tag("cursor")
+                Text("CopilotBot").tag("copilot")
+                Text("QoderBot").tag("qoder")
+                Text("Droid").tag("droid")
+                Text("Buddy").tag("codebuddy")
+                Text("OpBot").tag("opencode")
+            }
+
+            if isCustomized {
+                Button("Reset this override") {
+                    MascotOverrides.setOverride(nil, for: source)
+                }
+                .font(.caption)
+            }
         }
         .padding(.vertical, 4)
     }

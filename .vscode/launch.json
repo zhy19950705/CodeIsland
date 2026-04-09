@@ -1,0 +1,44 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:CodeIsland}",
+            "name": "Debug codeisland-bridge",
+            "target": "codeisland-bridge",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug codeisland-bridge"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:CodeIsland}",
+            "name": "Release codeisland-bridge",
+            "target": "codeisland-bridge",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release codeisland-bridge"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:CodeIsland}",
+            "name": "Debug CodeIsland",
+            "target": "CodeIsland",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug CodeIsland"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:CodeIsland}",
+            "name": "Release CodeIsland",
+            "target": "CodeIsland",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release CodeIsland"
+        }
+    ]
+}

@@ -212,12 +212,30 @@ final class SessionTerminalIndexStore {
     }
 
     func persist(sessionId: String, session: SessionSnapshot) {
-        guard !session.isHistoricalSnapshot else { return }
+        persist(sessions: [sessionId: session])
+    }
+
+    func persist(sessions: [String: SessionSnapshot]) {
+        guard !sessions.isEmpty else { return }
 
         var records = loadRecords()
-        let record = PersistedSessionTerminalRecord(session: session, existing: records[sessionId])
-        guard record.hasUsefulContent else { return }
-        records[sessionId] = record
+        var didChange = false
+
+        for (sessionId, session) in sessions {
+            guard !session.isHistoricalSnapshot else { continue }
+            guard !SessionFilter.shouldIgnoreSession(source: session.source, cwd: session.cwd, termBundleId: session.termBundleId) else {
+                if records.removeValue(forKey: sessionId) != nil {
+                    didChange = true
+                }
+                continue
+            }
+            let record = PersistedSessionTerminalRecord(session: session, existing: records[sessionId])
+            guard record.hasUsefulContent else { continue }
+            records[sessionId] = record
+            didChange = true
+        }
+
+        guard didChange else { return }
         prune(records: &records)
         write(records)
     }

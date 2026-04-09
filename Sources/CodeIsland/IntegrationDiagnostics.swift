@@ -31,6 +31,14 @@ enum EditorBridgeHost: String, CaseIterable, Identifiable, Sendable {
         case .windsurf: return "com.exafunction.windsurf"
         }
     }
+
+    var extensionHost: IDEExtensionHost {
+        switch self {
+        case .visualStudioCode: return .visualStudioCode
+        case .cursor: return .cursor
+        case .windsurf: return .windsurf
+        }
+    }
 }
 
 enum EditorBridgeState: Sendable {
@@ -60,6 +68,7 @@ struct EditorBridgeSnapshot: Identifiable, Sendable {
     var host: EditorBridgeHost
     var state: EditorBridgeState
     var installPath: String?
+    var extensionInstalled: Bool
 }
 
 final class EditorBridgeManager {
@@ -88,7 +97,8 @@ final class EditorBridgeManager {
             return EditorBridgeSnapshot(
                 host: host,
                 state: state,
-                installPath: appURL?.path
+                installPath: appURL?.path,
+                extensionInstalled: IDEExtensionInstaller.isInstalled(host.extensionHost)
             )
         }
     }

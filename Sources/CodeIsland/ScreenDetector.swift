@@ -13,6 +13,30 @@ struct ScreenDetector {
         return min(max(screenW * 0.14, 160), 240)
     }
 
+    static func resolvedNotchWidth(
+        screenWidth: CGFloat,
+        auxiliaryLeftWidth: CGFloat?,
+        auxiliaryRightWidth: CGFloat?,
+        override: CGFloat?
+    ) -> CGFloat {
+        if let override, override > 0 {
+            return override
+        }
+
+        let leftWidth = auxiliaryLeftWidth ?? 0
+        let rightWidth = auxiliaryRightWidth ?? 0
+        if leftWidth > 0 || rightWidth > 0 {
+            return screenWidth - leftWidth - rightWidth
+        }
+
+        return min(max(screenWidth * 0.14, 160), 240)
+    }
+
+    static func defaultManualNotchWidth(for screen: NSScreen? = NSScreen.main) -> Int {
+        let targetScreen = screen ?? preferredScreen
+        return Int(automaticNotchWidth(for: targetScreen).rounded())
+    }
+
     static func autoPreferredIndex(candidates: [Candidate], activeWindowBounds: CGRect?) -> Int? {
         guard !candidates.isEmpty else { return nil }
 
@@ -55,14 +79,14 @@ struct ScreenDetector {
         let candidates = screens.map { screen in
             Candidate(
                 frame: screen.frame,
-                hasNotch: screenHasNotch(screen),
+                hasNotch: screen.isBuiltinDisplay || screenHasNotch(screen),
                 isMain: mainScreen == screen
             )
         }
 
         if let index = autoPreferredIndex(
             candidates: candidates,
-            activeWindowBounds: frontmostApplicationWindowBounds()
+            activeWindowBounds: activeScreenHintBounds()
         ), index < screens.count {
             return screens[index]
         }
@@ -113,14 +137,31 @@ struct ScreenDetector {
 
     /// Width of the notch for a specific screen
     static func notchWidth(for screen: NSScreen) -> CGFloat {
+        if let override = notchWidthOverride() {
+            return override
+        }
+
+        return automaticNotchWidth(for: screen)
+    }
+
+    private static func automaticNotchWidth(for screen: NSScreen) -> CGFloat {
         if #available(macOS 12.0, *) {
             let leftWidth = screen.auxiliaryTopLeftArea?.width ?? 0
             let rightWidth = screen.auxiliaryTopRightArea?.width ?? 0
-            if leftWidth > 0 || rightWidth > 0 {
-                return screen.frame.width - leftWidth - rightWidth
-            }
+            return resolvedNotchWidth(
+                screenWidth: screen.frame.width,
+                auxiliaryLeftWidth: leftWidth,
+                auxiliaryRightWidth: rightWidth,
+                override: nil
+            )
         }
         return fakeNotchWidth(for: screen)
+    }
+
+    private static func notchWidthOverride() -> CGFloat? {
+        let value = UserDefaults.standard.integer(forKey: SettingsKey.notchWidthOverride)
+        guard value > 0 else { return nil }
+        return CGFloat(value)
     }
 
     static func signature(for screen: NSScreen) -> String {
@@ -134,45 +175,18 @@ struct ScreenDetector {
         return intersection.width * intersection.height
     }
 
-    private static func frontmostApplicationWindowBounds() -> CGRect? {
-        guard let frontApp = NSWorkspace.shared.frontmostApplication else { return nil }
-        let ownPID = ProcessInfo.processInfo.processIdentifier
-        let preferredPID: pid_t? = frontApp.processIdentifier == ownPID ? nil : frontApp.processIdentifier
-
-        guard let windowList = CGWindowListCopyWindowInfo(
-            [.optionOnScreenOnly, .excludeDesktopElements],
-            kCGNullWindowID
-        ) as? [[String: Any]] else {
-            return nil
-        }
-
-        for window in windowList {
-            guard let pid = window[kCGWindowOwnerPID as String] as? pid_t,
-                  let layer = window[kCGWindowLayer as String] as? Int,
-                  layer == 0,
-                  let bounds = window[kCGWindowBounds as String] as? [String: Any],
-                  let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary),
-                  rect.width > 0,
-                  rect.height > 0 else { continue }
-            guard pid != ownPID else { continue }
-            if let preferredPID, pid != preferredPID { continue }
-            return rect
-        }
-
-        guard preferredPID != nil else { return nil }
-
-        for window in windowList {
-            guard let pid = window[kCGWindowOwnerPID as String] as? pid_t,
-                  pid != ownPID,
-                  let layer = window[kCGWindowLayer as String] as? Int,
-                  layer == 0,
-                  let bounds = window[kCGWindowBounds as String] as? [String: Any],
-                  let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary),
-                  rect.width > 0,
-                  rect.height > 0 else { continue }
-            return rect
-        }
-
-        return nil
+    /// Returns a tiny rect at the current pointer location to hint which
+    /// screen the user is currently working on.
+    ///
+    /// Previously this method called `CGWindowListCopyWindowInfo` to locate the
+    /// frontmost app's main window. On macOS 15+ that API triggers spurious
+    /// "App X wants to record your screen" prompts for whichever app happens to
+    /// be in the foreground (the caller polls it frequently). The mouse
+    /// location is a zero-permission proxy that is good enough for picking the
+    /// right display, and `autoPreferredIndex` only relies on the rect's
+    /// midpoint / overlap when choosing a candidate screen.
+    private static func activeScreenHintBounds() -> CGRect? {
+        let location = NSEvent.mouseLocation
+        return CGRect(x: location.x, y: location.y, width: 1, height: 1)
     }
 }

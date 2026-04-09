@@ -451,7 +451,7 @@ private struct CompactRightWing: View {
     }
 }
 
-private struct CompactUsageBadge: View {
+struct CompactUsageBadge: View {
     @ObservedObject private var l10n = L10n.shared
     let provider: UsageProviderSnapshot
 
@@ -470,6 +470,13 @@ private struct CompactUsageBadge: View {
         var lines = [headline, primary.detail]
         if let summary = provider.summary, !summary.isEmpty {
             lines.append(summary)
+        }
+        if let monthly = provider.monthly {
+            var monthlyLine = "\(l10n["usage_this_month"]) \(monthly.label): \(compactTokenSummary(monthly.totalTokens))"
+            if let costUSD = monthly.costUSD {
+                monthlyLine += " · \(String(format: "$%.2f", costUSD))"
+            }
+            lines.append(monthlyLine)
         }
         return lines.joined(separator: "\n")
     }
@@ -495,6 +502,16 @@ private struct CompactUsageBadge: View {
                 .strokeBorder(tint.opacity(0.35), lineWidth: 1)
         )
         .help(helpText)
+    }
+
+    private func compactTokenSummary(_ totalTokens: Int) -> String {
+        if totalTokens >= 1_000_000 {
+            return String(format: "%.1fM", Double(totalTokens) / 1_000_000)
+        }
+        if totalTokens >= 1_000 {
+            return String(format: "%.1fK", Double(totalTokens) / 1_000)
+        }
+        return "\(totalTokens)"
     }
 }
 
@@ -690,7 +707,7 @@ private struct IdleIndicatorBar: View {
 
 // MARK: - Approval Bar (below notch, auto-expanded)
 
-private struct ApprovalBar: View {
+struct ApprovalBar: View {
     let tool: String
     let toolInput: [String: Any]?
     let queuePosition: Int
@@ -919,7 +936,7 @@ private struct ApprovalBar: View {
 
 // MARK: - Question Bar (below notch, auto-expanded)
 
-private struct QuestionBar: View {
+struct QuestionBar: View {
     let question: String
     let options: [String]?
     let descriptions: [String]?
@@ -1129,12 +1146,27 @@ private struct PixelButton: View {
 
 // MARK: - Session List
 
-private struct SessionListView: View {
+enum SessionListPresentation {
+    case notch
+    case menuBar
+}
+
+struct SessionListView: View {
     var appState: AppState
     /// When set, only show this session (auto-expand on completion)
     var onlySessionId: String? = nil
+    var presentation: SessionListPresentation = .notch
     @AppStorage(SettingsKey.sessionGroupingMode) private var groupingMode = SettingsDefaults.sessionGroupingMode
     @AppStorage(SettingsKey.maxVisibleSessions) private var maxVisibleSessions = SettingsDefaults.maxVisibleSessions
+    @State private var codexInput = ""
+
+    private var activeCodexSessionId: String? {
+        guard let sessionId = appState.activeSessionId,
+              let session = appState.sessions[sessionId],
+              session.source == "codex",
+              appState.canContinueActiveCodexSession else { return nil }
+        return sessionId
+    }
 
     /// Sort priority: attention-needed > active > recent activity > stable ID
     private func sortedByActivity(_ ids: [String]) -> [String] {
@@ -1233,11 +1265,44 @@ private struct SessionListView: View {
         }
     }
 
+    static func needsScroll(
+        totalSessionCount: Int,
+        groupHeaderCount: Int,
+        hasComposer: Bool,
+        maxVisibleSessions: Int,
+        onlySessionId: String?,
+        presentation: SessionListPresentation = .notch
+    ) -> Bool {
+        guard onlySessionId == nil else { return false }
+
+        // Menu bar popover has a fixed outer height and its own scroller —
+        // always let the list scroll inside it so overflow never gets
+        // silently clipped when cards, headers, or the composer combine to
+        // exceed the popover's content area.
+        if presentation == .menuBar {
+            return totalSessionCount > 0
+        }
+
+        let estimatedVisibleUnits = Double(totalSessionCount)
+            + (Double(groupHeaderCount) * 0.3)
+            + (hasComposer ? 0.9 : 0)
+
+        return estimatedVisibleUnits > Double(maxVisibleSessions)
+    }
+
     var body: some View {
         // Compute once per render — groupedSessions, totalCount, needsScroll
         let groups = groupedSessions
         let totalSessionCount = groups.reduce(0) { $0 + $1.ids.count }
-        let needsScroll = onlySessionId == nil && totalSessionCount > maxVisibleSessions
+        let groupHeaderCount = groups.filter { !$0.header.isEmpty }.count
+        let needsScroll = Self.needsScroll(
+            totalSessionCount: totalSessionCount,
+            groupHeaderCount: groupHeaderCount,
+            hasComposer: activeCodexSessionId != nil,
+            maxVisibleSessions: maxVisibleSessions,
+            onlySessionId: onlySessionId,
+            presentation: presentation
+        )
         let content = VStack(spacing: 6) {
             ForEach(groups, id: \.header) { group in
                 if !group.header.isEmpty {
@@ -1260,6 +1325,7 @@ private struct SessionListView: View {
                 ForEach(group.ids, id: \.self) { sessionId in
                     if let session = appState.sessions[sessionId] {
                         SessionCard(
+                            appState: appState,
                             sessionId: sessionId,
                             session: session,
                             isCompletion: onlySessionId != nil
@@ -1277,11 +1343,32 @@ private struct SessionListView: View {
                     }
                 }
             }
+
+            if let sessionId = activeCodexSessionId,
+               let session = appState.sessions[sessionId] {
+                CodexComposerBar(
+                    projectName: session.projectDisplayName,
+                    text: $codexInput,
+                    onSubmit: {
+                        let value = codexInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !value.isEmpty else { return }
+                        appState.sendPromptToSession(sessionId, text: value)
+                        codexInput = ""
+                    }
+                )
+            }
         }
         .padding(.vertical, 4)
 
         if needsScroll {
-            ThinScrollView(maxHeight: CGFloat(maxVisibleSessions) * 90) {
+            // Notch mode clamps the scroll view to an estimated row height so
+            // it visually hugs the list; menu bar mode lets the scroll view
+            // fill the popover's fixed content area so overflow actually
+            // scrolls instead of getting clipped.
+            let scrollMaxHeight: CGFloat = presentation == .menuBar
+                ? .greatestFiniteMagnitude
+                : CGFloat(maxVisibleSessions) * 90
+            ThinScrollView(maxHeight: scrollMaxHeight) {
                 content
             }
             .clipShape(
@@ -1297,6 +1384,66 @@ private struct SessionListView: View {
     }
 }
 
+private struct CodexComposerBar: View {
+    let projectName: String
+    @Binding var text: String
+    let onSubmit: () -> Void
+
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                if let icon = cliIcon(source: "codex", size: 12) {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .frame(width: 12, height: 12)
+                }
+                Text(projectName)
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.65))
+                Spacer()
+            }
+
+            HStack(spacing: 8) {
+                Text(">")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color(red: 0.3, green: 0.85, blue: 0.4))
+                TextField(L10n.shared["type_message"], text: $text)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(.white)
+                    .focused($isFocused)
+                    .onSubmit(onSubmit)
+                Button(action: onSubmit) {
+                    Text(L10n.shared["send"])
+                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(Color(red: 0.16, green: 0.38, blue: 0.18))
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
+                .buttonStyle(.plain)
+                .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .opacity(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.45 : 1)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(Color.white.opacity(0.05))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 4)
+        .padding(.bottom, 8)
+        .onAppear { isFocused = false }
+    }
+}
+
 /// Thin overlay scrollbar via NSScrollView — ignores system "show scrollbar" preference.
 private struct ThinScrollView<Content: View>: NSViewRepresentable {
     let maxHeight: CGFloat
@@ -1305,21 +1452,30 @@ private struct ThinScrollView<Content: View>: NSViewRepresentable {
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
         scrollView.hasVerticalScroller = true
-        scrollView.scrollerStyle = .overlay
-        scrollView.verticalScroller?.controlSize = .mini
         scrollView.drawsBackground = false
         scrollView.scrollerKnobStyle = .light
+        scrollView.autohidesScrollers = false
+        scrollView.scrollerStyle = .legacy
+        scrollView.verticalScroller?.controlSize = .small
 
         let hosting = NSHostingView(rootView: content)
         hosting.translatesAutoresizingMaskIntoConstraints = false
         scrollView.documentView = hosting
 
         scrollView.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
+        var constraints: [NSLayoutConstraint] = [
             hosting.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
             hosting.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor),
-            scrollView.heightAnchor.constraint(lessThanOrEqualToConstant: maxHeight),
-        ])
+        ]
+        // When maxHeight is unbounded, let the parent (e.g. a fixed-size
+        // popover) drive the scroll view's height. Otherwise cap it so the
+        // notch surface hugs its content.
+        if maxHeight.isFinite && maxHeight < .greatestFiniteMagnitude {
+            constraints.append(
+                scrollView.heightAnchor.constraint(lessThanOrEqualToConstant: maxHeight)
+            )
+        }
+        NSLayoutConstraint.activate(constraints)
 
         return scrollView
     }
@@ -1328,8 +1484,9 @@ private struct ThinScrollView<Content: View>: NSViewRepresentable {
         if let hosting = scrollView.documentView as? NSHostingView<Content> {
             hosting.rootView = content
         }
-        scrollView.scrollerStyle = .overlay
-        scrollView.verticalScroller?.controlSize = .mini
+        scrollView.autohidesScrollers = false
+        scrollView.scrollerStyle = .legacy
+        scrollView.verticalScroller?.controlSize = .small
     }
 }
 
@@ -1498,15 +1655,31 @@ private struct SessionsExpandLink: View {
 }
 
 private struct SessionCard: View {
+    var appState: AppState
     let sessionId: String
     let session: SessionSnapshot
     var isCompletion: Bool = false
     @State private var hovering = false
+    @State private var inlineAnswer = ""
     @AppStorage(SettingsKey.contentFontSize) private var contentFontSize = SettingsDefaults.contentFontSize
     @AppStorage(SettingsKey.aiMessageLines) private var aiMessageLines = SettingsDefaults.aiMessageLines
     @AppStorage(SettingsKey.showAgentDetails) private var showAgentDetails = SettingsDefaults.showAgentDetails
     private var fontSize: CGFloat { CGFloat(contentFontSize) }
-    private var aiLineLimit: Int? { aiMessageLines > 0 ? aiMessageLines : nil }
+    private var aiLineLimit: Int? { hovering ? min(max(aiMessageLines, 2), 4) : (aiMessageLines > 0 ? aiMessageLines : nil) }
+    private var visibleMessages: [ChatMessage] {
+        if hovering {
+            return Array(session.recentMessages.suffix(3))
+        }
+        return session.status != .idle ? Array(session.recentMessages.suffix(2)) : session.recentMessages
+    }
+    private var pendingPermission: PermissionRequest? {
+        guard appState.pendingPermission?.event.sessionId == sessionId else { return nil }
+        return appState.pendingPermission
+    }
+    private var pendingQuestion: QuestionRequest? {
+        guard appState.pendingQuestion?.event.sessionId == sessionId else { return nil }
+        return appState.pendingQuestion
+    }
     private var statusNameColor: Color {
         if session.status == .idle && session.interrupted {
             return Color(red: 1.0, green: 0.45, blue: 0.35)
@@ -1583,10 +1756,6 @@ private struct SessionCard: View {
             // Chat history + live status
             if !session.recentMessages.isEmpty || session.status != .idle {
                 VStack(alignment: .leading, spacing: 3) {
-                    // Chat messages (detailed mode only)
-                    let visibleMessages = session.status != .idle
-                        ? Array(session.recentMessages.suffix(2))
-                        : session.recentMessages
                     ForEach(visibleMessages) { msg in
                         if msg.isUser {
                             HStack(alignment: .top, spacing: 4) {
@@ -1596,7 +1765,7 @@ private struct SessionCard: View {
                                 Text(renderUserText(msg.text))
                                     .font(.system(size: fontSize, weight: .medium, design: .monospaced))
                                     .foregroundStyle(.white.opacity(0.9))
-                                    .lineLimit(1)
+                                    .lineLimit(hovering ? 2 : 1)
                                     .truncationMode(.tail)
                             }
                         } else {
@@ -1633,6 +1802,46 @@ private struct SessionCard: View {
                 }
                 .padding(.leading, 4)
             }
+
+                if hovering, let cwd = session.cwd, !cwd.isEmpty {
+                    HStack(spacing: 5) {
+                        Image(systemName: "folder.fill")
+                            .font(.system(size: max(9, fontSize - 1)))
+                            .foregroundStyle(.white.opacity(0.4))
+                        Text(cwd)
+                            .font(.system(size: max(10, fontSize - 1), design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.45))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .padding(.top, 2)
+                }
+
+                if hovering, let pendingPermission {
+                    HoverApprovalActions(
+                        request: pendingPermission,
+                        onAllow: { appState.approvePermission(always: false) },
+                        onAlwaysAllow: { appState.approvePermission(always: true) },
+                        onDeny: { appState.denyPermission() }
+                    )
+                    .padding(.top, 6)
+                }
+
+                if hovering, let pendingQuestion {
+                    HoverQuestionActions(
+                        request: pendingQuestion,
+                        textInput: $inlineAnswer,
+                        onAnswer: { answer in
+                            appState.answerQuestion(answer)
+                            inlineAnswer = ""
+                        },
+                        onSkip: {
+                            appState.skipQuestion()
+                            inlineAnswer = ""
+                        }
+                    )
+                    .padding(.top, 6)
+                }
             } // end Column 2 VStack
         } // end HStack
         .padding(.horizontal, 16)
@@ -1678,6 +1887,144 @@ private struct SessionCard: View {
         if seconds < 3600 { return "\(seconds / 60)m" }
         if seconds < 86400 { return "\(seconds / 3600)h" }
         return "\(seconds / 86400)d"
+    }
+}
+
+private struct HoverApprovalActions: View {
+    let request: PermissionRequest
+    let onAllow: () -> Void
+    let onAlwaysAllow: () -> Void
+    let onDeny: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(request.event.toolDescription ?? request.event.toolName ?? "Approval needed")
+                .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.72))
+                .lineLimit(2)
+
+            HStack(spacing: 6) {
+                PixelButton(
+                    label: L10n.shared["deny"],
+                    fg: .white.opacity(0.95),
+                    bg: Color(red: 0.45, green: 0.12, blue: 0.12),
+                    border: Color(red: 0.7, green: 0.25, blue: 0.25),
+                    action: onDeny
+                )
+                PixelButton(
+                    label: L10n.shared["allow_once"],
+                    fg: .white.opacity(0.95),
+                    bg: Color(red: 0.16, green: 0.38, blue: 0.18),
+                    border: Color(red: 0.28, green: 0.62, blue: 0.32),
+                    action: onAllow
+                )
+                PixelButton(
+                    label: L10n.shared["always"],
+                    fg: .white.opacity(0.95),
+                    bg: Color(red: 0.14, green: 0.28, blue: 0.52),
+                    border: Color(red: 0.28, green: 0.48, blue: 0.82),
+                    action: onAlwaysAllow
+                )
+            }
+        }
+    }
+}
+
+private struct HoverQuestionActions: View {
+    let request: QuestionRequest
+    @Binding var textInput: String
+    let onAnswer: (String) -> Void
+    let onSkip: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(request.question.question)
+                .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.8))
+                .lineLimit(3)
+
+            if let options = request.question.options, !options.isEmpty {
+                VStack(spacing: 4) {
+                    ForEach(Array(options.enumerated()), id: \.offset) { idx, option in
+                        let desc = request.question.descriptions?.indices.contains(idx) == true ? request.question.descriptions?[idx] : nil
+                        Button {
+                            onAnswer(option)
+                        } label: {
+                            HStack(alignment: .top, spacing: 6) {
+                                Text("\(idx + 1).")
+                                    .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                                    .foregroundStyle(Color(red: 0.4, green: 0.7, blue: 1.0))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(option)
+                                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                        .foregroundStyle(.white.opacity(0.88))
+                                    if let desc, !desc.isEmpty {
+                                        Text(desc)
+                                            .font(.system(size: 9, design: .monospaced))
+                                            .foregroundStyle(.white.opacity(0.45))
+                                            .lineLimit(2)
+                                    }
+                                }
+                                Spacer()
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                            .background(Color.white.opacity(0.04))
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            } else {
+                HStack(spacing: 6) {
+                    Text(">")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color(red: 0.3, green: 0.85, blue: 0.4))
+                    TextField(L10n.shared["type_answer"], text: $textInput)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .foregroundStyle(.white)
+                        .onSubmit {
+                            let answer = textInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !answer.isEmpty {
+                                onAnswer(answer)
+                            }
+                        }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(Color.white.opacity(0.05))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+            }
+
+            HStack(spacing: 6) {
+                PixelButton(
+                    label: L10n.shared["skip"],
+                    fg: .white.opacity(0.6),
+                    bg: Color.white.opacity(0.06),
+                    border: Color.white.opacity(0.12),
+                    action: onSkip
+                )
+                if request.question.options == nil || request.question.options?.isEmpty == true {
+                    PixelButton(
+                        label: L10n.shared["submit"],
+                        fg: .white.opacity(0.95),
+                        bg: Color(red: 0.16, green: 0.38, blue: 0.18),
+                        border: Color(red: 0.28, green: 0.62, blue: 0.32),
+                        action: {
+                            let answer = textInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !answer.isEmpty {
+                                onAnswer(answer)
+                            }
+                        }
+                    )
+                }
+            }
+        }
     }
 }
 

@@ -70,7 +70,6 @@ class SettingsWindowController {
         closeObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification, object: window, queue: .main
         ) { _ in
-            // Hide Dock tile first to avoid flash of default icon during transition
             NSApp.setActivationPolicy(.accessory)
             NSApp.hide(nil)
         }

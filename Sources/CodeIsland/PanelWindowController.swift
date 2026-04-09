@@ -7,6 +7,19 @@ private let log = Logger(subsystem: "com.codeisland", category: "Panel")
 
 private class KeyablePanel: NSPanel {
     override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+
+    override func sendEvent(_ event: NSEvent) {
+        switch event.type {
+        case .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp:
+            NSApp.activate(ignoringOtherApps: true)
+            NSRunningApplication.current.activate(options: [.activateAllWindows])
+            makeKeyAndOrderFront(nil)
+        default:
+            break
+        }
+        super.sendEvent(event)
+    }
 }
 
 /// Ensures first click on a nonactivatingPanel fires SwiftUI actions
@@ -171,6 +184,7 @@ class PanelWindowController: NSObject, NSWindowDelegate {
     private var globalClickMonitor: Any?
     private var lastChosenScreenSignature = ""
     private var isAnimatingScreenHop = false
+    private var lastNotchWidthOverride = SettingsDefaults.notchWidthOverride
     private var dragStartMouseX: CGFloat?
     private var dragStartPanelX: CGFloat?
     private var isDraggingPanel = false
@@ -182,6 +196,14 @@ class PanelWindowController: NSObject, NSWindowDelegate {
     }
 
     func showPanel() {
+        if let panel {
+            updatePosition()
+            updateVisibility()
+            panel.orderFrontRegardless()
+            return
+        }
+
+        ScreenSelector.shared.refreshScreens()
         let screen = chosenScreen()
         let contentView = makeHostingView(for: screen)
         self.hostingView = contentView
@@ -299,6 +321,17 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         }
     }
 
+    func revealPanel() {
+        guard let panel else { return }
+        updatePosition()
+        panel.orderFrontRegardless()
+        panel.makeKey()
+    }
+
+    func hidePanel() {
+        panel?.orderOut(nil)
+    }
+
     private func makeHostingView(for screen: NSScreen) -> NotchHostingView<NotchPanelView> {
         let hasNotch = ScreenDetector.screenHasNotch(screen)
         let notchHeight = ScreenDetector.topBarHeight(for: screen)
@@ -408,10 +441,11 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    private var lastDisplayChoice = ""
+    private var lastScreenSelectionPreference = ""
 
     private func observeSettingsChanges() {
-        lastDisplayChoice = SettingsManager.shared.displayChoice
+        lastScreenSelectionPreference = ScreenSelector.shared.preferenceSignature
+        lastNotchWidthOverride = SettingsManager.shared.notchWidthOverride
         let observer = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification,
             object: nil,
@@ -419,9 +453,13 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         ) { [weak self] _ in
             Task { @MainActor in
                 guard let self = self else { return }
-                let newChoice = SettingsManager.shared.displayChoice
-                if newChoice != self.lastDisplayChoice {
-                    self.lastDisplayChoice = newChoice
+                let newPreference = ScreenSelector.shared.preferenceSignature
+                let newNotchWidthOverride = SettingsManager.shared.notchWidthOverride
+                if newPreference != self.lastScreenSelectionPreference
+                    || newNotchWidthOverride != self.lastNotchWidthOverride {
+                    self.lastScreenSelectionPreference = newPreference
+                    self.lastNotchWidthOverride = newNotchWidthOverride
+                    ScreenSelector.shared.refreshScreens()
                     self.refreshCurrentScreen(forceRebuild: true)
                     self.configureAutoScreenPolling()
                 } else {
@@ -437,7 +475,7 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         autoScreenPoller?.invalidate()
         autoScreenPoller = nil
 
-        guard SettingsManager.shared.displayChoice == "auto" else { return }
+        guard ScreenSelector.shared.selectionMode == .automatic else { return }
 
         autoScreenPoller = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -533,19 +571,9 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// Choose which screen to display on based on displayChoice setting
+    /// Choose which screen to display on based on the persisted screen selection.
     private func chosenScreen() -> NSScreen {
-        let choice = SettingsManager.shared.displayChoice
-
-        // Handle specific screen index: "screen_0", "screen_1", etc.
-        if choice.hasPrefix("screen_"),
-           let index = Int(choice.dropFirst(7)),
-           index < NSScreen.screens.count {
-            return NSScreen.screens[index]
-        }
-
-        // "auto" — prefer notch screen, fallback to main
-        return ScreenDetector.preferredScreen
+        ScreenSelector.shared.selectedScreen ?? ScreenDetector.preferredScreen
     }
 
     /// Poll every 1.5s while in fullscreen; stop when fullscreen ends
@@ -567,6 +595,11 @@ class PanelWindowController: NSObject, NSWindowDelegate {
     /// Update panel visibility based on settings
     private func updateVisibility() {
         guard let panel = panel else { return }
+        guard shouldShowPanel(on: chosenScreen()) else {
+            panel.orderOut(nil)
+            return
+        }
+
         let settings = SettingsManager.shared
         if settings.hideInFullscreen && fullscreenLatch {
             panel.orderOut(nil)
@@ -583,36 +616,41 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         }
     }
 
+    private func shouldShowPanel(on screen: NSScreen) -> Bool {
+        Self.resolvedPresentationMode(
+            displayMode: SettingsManager.shared.displayMode,
+            hasPhysicalNotch: ScreenDetector.screenHasNotch(screen),
+            screenCount: max(ScreenSelector.shared.availableScreens.count, 1)
+        ) != .menuBar
+    }
+
+    nonisolated static func resolvedPresentationMode(
+        displayMode: DisplayMode,
+        hasPhysicalNotch: Bool,
+        screenCount: Int
+    ) -> DisplayMode {
+        DisplayModeCoordinator.resolveMode(
+            displayMode,
+            hasPhysicalNotch: hasPhysicalNotch,
+            screenCount: screenCount
+        )
+    }
+
     private func isActiveSpaceFullscreen() -> Bool {
         guard let frontApp = NSWorkspace.shared.frontmostApplication,
               frontApp.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return false }
 
+        // Detect fullscreen by observing that the menu bar has disappeared on
+        // the target screen. macOS fullscreen always hides the menu bar on the
+        // host display, so `visibleFrame` becomes equal to `frame`.
+        //
+        // We deliberately avoid `CGWindowListCopyWindowInfo` here: on macOS
+        // 15+ polling that API causes the system to surface spurious "X wants
+        // to record your screen" prompts for whichever app is frontmost, and
+        // this method runs on a timer.
         let screen = chosenScreen()
-
-        // Primary: check if frontmost app has a window covering the entire screen
-        if let windowList = CGWindowListCopyWindowInfo(
-            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
-        ) as? [[String: Any]] {
-            for window in windowList {
-                guard let pid = window[kCGWindowOwnerPID as String] as? pid_t,
-                      pid == frontApp.processIdentifier,
-                      let layer = window[kCGWindowLayer as String] as? Int, layer == 0,
-                      let bounds = window[kCGWindowBounds as String] as? [String: Any],
-                      let w = bounds["Width"] as? CGFloat,
-                      let h = bounds["Height"] as? CGFloat else { continue }
-                if w >= screen.frame.width && h >= screen.frame.height {
-                    return true
-                }
-            }
-        }
-
-        // Fallback: menu bar disappeared on this screen (no Screen Recording permission needed)
         let menuBarGap = screen.frame.maxY - screen.visibleFrame.maxY
-        if menuBarGap < 1 {
-            return true
-        }
-
-        return false
+        return menuBarGap < 1
     }
 
     /// Fast check: is the terminal running the active session the foreground app?

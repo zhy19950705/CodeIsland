@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import SwiftUI
 import os.log
 
@@ -6,15 +7,22 @@ import os.log
 class AppDelegate: NSObject, NSApplicationDelegate {
     private static let log = Logger(subsystem: "com.codeisland", category: "AppDelegate")
 
-    var panelController: PanelWindowController?
+    var panelController: PanelWindowController? { displayModeCoordinator?.panelController }
     private var hookServer: HookServer?
     private var hookRecoveryTimer: Timer?
     private var lastHookCheck: Date = .distantPast
     private var globalShortcutMonitor: Any?
     private var localShortcutMonitor: Any?
     private var defaultsObserver: NSObjectProtocol?
+    private var displayModeCoordinator: DisplayModeCoordinator?
 
     let appState = AppState()
+
+    @objc private func handleIncomingURLEvent(_ event: NSAppleEventDescriptor, withReplyEvent _: NSAppleEventDescriptor) {
+        guard let raw = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
+              let url = URL(string: raw) else { return }
+        handleIncomingURL(url)
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         ProcessInfo.processInfo.disableAutomaticTermination("CodeIsland must stay running")
@@ -22,7 +30,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Pre-set app icon so Dock/menu bar use the packaged bundle icon.
         NSApp.applicationIconImage = SettingsWindowController.bundleAppIcon()
         SettingsWindowController.shared.bind(appState: appState)
-        StatusItemController.shared.syncVisibility()
+        StatusItemController.shared.bind(appState: appState)
         // Start HookServer BEFORE installing hooks into CLI configs.
         // If we write settings.json first, Claude Code picks up the new hooks
         // immediately but the socket isn't listening yet — PermissionRequest
@@ -36,8 +44,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             Self.log.warning("Failed to install hooks")
         }
 
-        panelController = PanelWindowController(appState: appState)
-        panelController?.showPanel()
+        let displayModeCoordinator = DisplayModeCoordinator(appState: appState)
+        displayModeCoordinator.start()
+        self.displayModeCoordinator = displayModeCoordinator
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleIncomingURLEvent(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL)
+        )
 
         let usageMonitorManager = UsageMonitorLaunchAgentManager()
         do {
@@ -101,9 +116,49 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let defaultsObserver {
             NotificationCenter.default.removeObserver(defaultsObserver)
         }
-        appState.saveSessions()
+        displayModeCoordinator?.stop()
+        appState.flushPendingTerminalIndexPersist()
+        appState.saveSessions(synchronously: true)
         hookServer?.stop()
         appState.stopSessionDiscovery()
+        Task.detached {
+            await CodexAppServerClient.shared.stop()
+        }
+    }
+
+    private func handleIncomingURL(_ url: URL) {
+        guard url.scheme?.lowercased() == "codeisland" else { return }
+
+        let host = (url.host ?? "").lowercased()
+        let pathComponents = url.pathComponents.filter { $0 != "/" }.map { $0.lowercased() }
+        let route = host.isEmpty ? pathComponents.first ?? "" : host
+        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        let queryItems = components?.queryItems ?? []
+        let sessionId = queryItems.first(where: { $0.name == "sessionId" })?.value
+        let cwd = queryItems.first(where: { $0.name == "cwd" })?.value
+        let source = queryItems.first(where: { $0.name == "source" })?.value
+
+        NSApp.activate(ignoringOtherApps: true)
+
+        switch route {
+        case "settings":
+            SettingsWindowController.shared.show()
+        case "session":
+            if let sessionId, appState.focusSession(sessionId: sessionId) {
+                displayModeCoordinator?.revealPrimaryInterface()
+                return
+            }
+            if appState.focusSession(cwd: cwd, source: source) != nil {
+                displayModeCoordinator?.revealPrimaryInterface()
+            } else {
+                displayModeCoordinator?.revealPrimaryInterface()
+                withAnimation(NotchAnimation.open) {
+                    appState.surface = .sessionList
+                }
+            }
+        default:
+            displayModeCoordinator?.revealPrimaryInterface()
+        }
     }
 
     // MARK: - Global Shortcuts
@@ -150,17 +205,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func executeShortcut(_ action: ShortcutAction) {
         switch action {
         case .togglePanel:
-            if appState.surface.isExpanded {
-                withAnimation(NotchAnimation.close) { appState.surface = .collapsed }
-            } else {
-                withAnimation(NotchAnimation.open) {
-                    appState.surface = .sessionList
-                    appState.cancelCompletionQueue()
-                    if appState.activeSessionId == nil {
-                        appState.activeSessionId = appState.preferredSessionId
-                    }
-                }
-            }
+            displayModeCoordinator?.togglePrimaryInterface()
         case .approve:
             appState.approvePermission()
         case .approveAlways:
@@ -192,7 +237,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             queue: .main
         ) { _ in
             Task { @MainActor in
-                StatusItemController.shared.syncVisibility()
+                self.setupGlobalShortcut()
             }
         }
     }

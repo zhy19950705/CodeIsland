@@ -10,13 +10,23 @@ enum AppVersion {
     }
 }
 
+enum DisplayMode: String, CaseIterable {
+    case auto
+    case notch
+    case menuBar
+}
+
 enum SettingsKey {
     // Language
     static let appLanguage = "appLanguage"                 // "system", "en", "zh"
 
     // General - System
     static let launchAtLogin = "launchAtLogin"
-    static let displayChoice = "displayChoice"             // "auto", "builtin", "main"
+    static let displayChoice = "displayChoice"             // Legacy key kept for migration
+    static let displayMode = "displayMode"
+    static let menuBarShowDetail = "menuBarShowDetail"
+    static let screenSelectionMode = "screenSelectionMode"
+    static let selectedScreenIdentifier = "selectedScreenIdentifier"
     static let allowHorizontalDrag = "allowHorizontalDrag"
     static let panelHorizontalOffset = "panelHorizontalOffset"
 
@@ -29,6 +39,7 @@ enum SettingsKey {
 
     // Display
     static let maxPanelHeight = "maxPanelHeight"
+    static let notchWidthOverride = "notchWidthOverride"
     static let maxVisibleSessions = "maxVisibleSessions"
     static let contentFontSize = "contentFontSize"
     static let aiMessageLines = "aiMessageLines"
@@ -55,6 +66,8 @@ enum SettingsKey {
 
     // Mascot
     static let mascotSpeed = "mascotSpeed"
+    static let mascotOverridesVersion = "mascotOverridesVersion"
+    static func mascotOverride(_ clientSource: String) -> String { "mascotOverride_\(clientSource)" }
 
     // Session grouping
     static let sessionGroupingMode = "sessionGroupingMode"
@@ -66,6 +79,9 @@ enum SettingsKey {
 
 struct SettingsDefaults {
     static let displayChoice = "auto"
+    static let displayMode = DisplayMode.notch.rawValue
+    static let menuBarShowDetail = false
+    static let screenSelectionMode = "automatic"
     static let allowHorizontalDrag = false
     static let panelHorizontalOffset = 0.0
     static let hideInFullscreen = true
@@ -75,6 +91,7 @@ struct SettingsDefaults {
     static let sessionTimeout = 30
 
     static let maxPanelHeight = 560
+    static let notchWidthOverride = 0
     static let maxVisibleSessions = 5
     static let contentFontSize = 11
     static let aiMessageLines = 1
@@ -108,6 +125,9 @@ class SettingsManager {
     private init() {
         defaults.register(defaults: [
             SettingsKey.displayChoice: SettingsDefaults.displayChoice,
+            SettingsKey.displayMode: SettingsDefaults.displayMode,
+            SettingsKey.menuBarShowDetail: SettingsDefaults.menuBarShowDetail,
+            SettingsKey.screenSelectionMode: SettingsDefaults.screenSelectionMode,
             SettingsKey.allowHorizontalDrag: SettingsDefaults.allowHorizontalDrag,
             SettingsKey.panelHorizontalOffset: SettingsDefaults.panelHorizontalOffset,
             SettingsKey.hideInFullscreen: SettingsDefaults.hideInFullscreen,
@@ -116,6 +136,7 @@ class SettingsManager {
             SettingsKey.collapseOnMouseLeave: SettingsDefaults.collapseOnMouseLeave,
             SettingsKey.sessionTimeout: SettingsDefaults.sessionTimeout,
             SettingsKey.maxPanelHeight: SettingsDefaults.maxPanelHeight,
+            SettingsKey.notchWidthOverride: SettingsDefaults.notchWidthOverride,
             SettingsKey.maxVisibleSessions: SettingsDefaults.maxVisibleSessions,
             SettingsKey.contentFontSize: SettingsDefaults.contentFontSize,
             SettingsKey.aiMessageLines: SettingsDefaults.aiMessageLines,
@@ -131,6 +152,7 @@ class SettingsManager {
             SettingsKey.soundPackID: SettingsDefaults.soundPackID,
             SettingsKey.maxToolHistory: SettingsDefaults.maxToolHistory,
             SettingsKey.mascotSpeed: SettingsDefaults.mascotSpeed,
+            SettingsKey.mascotOverridesVersion: 0,
             SettingsKey.sessionGroupingMode: SettingsDefaults.sessionGroupingMode,
             SettingsKey.showToolStatus: SettingsDefaults.showToolStatus,
         ])
@@ -151,6 +173,27 @@ class SettingsManager {
     var displayChoice: String {
         get { defaults.string(forKey: SettingsKey.displayChoice) ?? SettingsDefaults.displayChoice }
         set { defaults.set(newValue, forKey: SettingsKey.displayChoice) }
+    }
+
+    var displayMode: DisplayMode {
+        get {
+            guard let rawValue = defaults.string(forKey: SettingsKey.displayMode),
+                  let mode = DisplayMode(rawValue: rawValue) else {
+                return .notch
+            }
+            return mode
+        }
+        set { defaults.set(newValue.rawValue, forKey: SettingsKey.displayMode) }
+    }
+
+    var menuBarShowDetail: Bool {
+        get {
+            if defaults.object(forKey: SettingsKey.menuBarShowDetail) == nil {
+                return SettingsDefaults.menuBarShowDetail
+            }
+            return defaults.bool(forKey: SettingsKey.menuBarShowDetail)
+        }
+        set { defaults.set(newValue, forKey: SettingsKey.menuBarShowDetail) }
     }
 
     var allowHorizontalDrag: Bool {
@@ -191,6 +234,11 @@ class SettingsManager {
     var maxPanelHeight: Int {
         get { defaults.integer(forKey: SettingsKey.maxPanelHeight) }
         set { defaults.set(newValue, forKey: SettingsKey.maxPanelHeight) }
+    }
+
+    var notchWidthOverride: Int {
+        get { defaults.integer(forKey: SettingsKey.notchWidthOverride) }
+        set { defaults.set(max(0, newValue), forKey: SettingsKey.notchWidthOverride) }
     }
 
     var contentFontSize: Int {

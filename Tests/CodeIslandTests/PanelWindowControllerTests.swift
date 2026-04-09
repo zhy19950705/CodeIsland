@@ -3,6 +3,28 @@ import XCTest
 @testable import CodeIsland
 
 final class PanelWindowControllerTests: XCTestCase {
+    func testResolvedPresentationModeUsesMenuBarForExplicitMenuBarOnSingleScreen() {
+        XCTAssertEqual(
+            PanelWindowController.resolvedPresentationMode(
+                displayMode: .menuBar,
+                hasPhysicalNotch: true,
+                screenCount: 1
+            ),
+            .menuBar
+        )
+    }
+
+    func testResolvedPresentationModeUsesMenuBarForAutoOnSingleScreenWithoutNotch() {
+        XCTAssertEqual(
+            PanelWindowController.resolvedPresentationMode(
+                displayMode: .auto,
+                hasPhysicalNotch: false,
+                screenCount: 1
+            ),
+            .menuBar
+        )
+    }
+
     func testScreenHopMotionUsesMoreVisibleTiming() {
         let motion = PanelWindowController.screenHopMotion()
 

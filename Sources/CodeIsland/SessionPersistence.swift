@@ -36,6 +36,7 @@ enum SessionPersistence {
     static func save(_ sessions: [String: SessionSnapshot]) {
         let persisted: [PersistedSession] = sessions.compactMap { (id, s) in
             guard !s.isHistoricalSnapshot else { return nil }
+            guard !SessionFilter.shouldIgnoreSession(source: s.source, cwd: s.cwd, termBundleId: s.termBundleId) else { return nil }
             return PersistedSession(
                 sessionId: id,
                 cwd: s.cwd,

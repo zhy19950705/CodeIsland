@@ -21,12 +21,30 @@ public struct HookEvent {
               let eventName = json["hook_event_name"] as? String else {
             return nil
         }
+        self.init(
+            eventName: eventName,
+            sessionId: json["session_id"] as? String,
+            toolName: json["tool_name"] as? String,
+            agentId: json["agent_id"] as? String,
+            toolInput: json["tool_input"] as? [String: Any],
+            rawJSON: json
+        )
+    }
+
+    public init(
+        eventName: String,
+        sessionId: String?,
+        toolName: String?,
+        agentId: String? = nil,
+        toolInput: [String: Any]?,
+        rawJSON: [String: Any] = [:]
+    ) {
         self.eventName = eventName
-        self.sessionId = json["session_id"] as? String
-        self.toolName = json["tool_name"] as? String
-        self.toolInput = json["tool_input"] as? [String: Any]
-        self.agentId = json["agent_id"] as? String
-        self.rawJSON = json
+        self.sessionId = sessionId
+        self.toolName = toolName
+        self.agentId = agentId
+        self.toolInput = toolInput
+        self.rawJSON = rawJSON
     }
 
     public var toolDescription: String? {

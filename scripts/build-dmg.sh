@@ -48,7 +48,7 @@ sed -e "s/<string>${CURRENT_VER}<\/string>/<string>${VERSION}<\/string>/g" \
     "$REPO_ROOT/Info.plist" > "$CONTENTS_DIR/Info.plist"
 
 # Compile app icon and asset catalog
-xcrun actool \
+if ! xcrun actool \
     --output-format human-readable-text \
     --notices --warnings --errors \
     --platform macosx \
@@ -58,7 +58,9 @@ xcrun actool \
     --output-partial-info-plist /dev/null \
     --compile "$CONTENTS_DIR/Resources" \
     "$REPO_ROOT/Assets.xcassets" \
-    "$REPO_ROOT/AppIcon.icon"
+    "$REPO_ROOT/AppIcon.icon"; then
+    echo "warning: actool failed, continuing without compiled icon assets"
+fi
 
 # Copy SPM resource bundles at .app root where Bundle.module expects them
 for bundle in "$BUILD_DIR"/*/release/*.bundle; do

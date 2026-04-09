@@ -39,15 +39,24 @@ final class AppState {
     private var maxHistory: Int { SettingsManager.shared.maxToolHistory }
     private var cleanupTimer: Timer?
     private var autoCollapseTask: Task<Void, Never>?
+    private var codexRefreshTask: Task<Void, Never>?
     private var completionQueue: [String] = []
     /// Mouse must enter the panel before auto-collapse is allowed (prevents instant dismiss)
     var completionHasBeenEntered = false
     private var processMonitors: [String: (source: DispatchSourceProcess, pid: pid_t)] = [:]
     private var saveTimer: Timer?
+    private var terminalIndexFlushTask: Task<Void, Never>?
+    private var pendingTerminalIndexSessionIds: Set<String> = []
     private var fsEventStream: FSEventStreamRef?
     private var lastFSScanTime: Date = .distantPast
     private let sessionTerminalIndexStore = SessionTerminalIndexStore()
     private var usageSnapshotObserver: NSObjectProtocol?
+    private var codexPermissionObserver: NSObjectProtocol?
+    private var codexQuestionObserver: NSObjectProtocol?
+    private var codexRefreshObserver: NSObjectProtocol?
+    private var codexRefreshInFlight = false
+    private var lastCodexRefreshAt: Date = .distantPast
+    private var codexLatestTurnIds: [String: String] = [:]
     private var isShowingCompletion: Bool {
         if case .completionCard = surface { return true }
         return false
@@ -72,10 +81,76 @@ final class AppState {
                 self?.refreshUsageSnapshot()
             }
         }
+
+        codexPermissionObserver = NotificationCenter.default.addObserver(
+            forName: .codeIslandCodexPermissionRequested,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            Task { @MainActor in
+                self?.handleCodexPermissionNotification(note)
+            }
+        }
+
+        codexQuestionObserver = NotificationCenter.default.addObserver(
+            forName: .codeIslandCodexQuestionRequested,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            Task { @MainActor in
+                self?.handleCodexQuestionNotification(note)
+            }
+        }
+
+        codexRefreshObserver = NotificationCenter.default.addObserver(
+            forName: .codeIslandCodexThreadRefreshRequested,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            Task { @MainActor in
+                self?.handleCodexRefreshNotification(note)
+            }
+        }
     }
 
     func refreshUsageSnapshot() {
         usageSnapshot = UsageSnapshotStore.load()
+    }
+
+    private func nonEmpty(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    func diagnosticsSnapshot() -> AppDiagnosticsSnapshot {
+        let sessions = self.sessions.map { sessionId, snapshot in
+            AppDiagnosticsSnapshot.SessionRecord(
+                sessionId: sessionId,
+                source: snapshot.source,
+                status: String(describing: snapshot.status),
+                cwd: snapshot.cwd,
+                model: snapshot.model,
+                currentTool: snapshot.currentTool,
+                termApp: snapshot.termApp,
+                termBundleId: snapshot.termBundleId,
+                cliPid: snapshot.cliPid,
+                lastActivity: snapshot.lastActivity,
+                startTime: snapshot.startTime,
+                interrupted: snapshot.interrupted,
+                isHistoricalSnapshot: snapshot.isHistoricalSnapshot
+            )
+        }
+        .sorted { $0.lastActivity > $1.lastActivity }
+
+        return AppDiagnosticsSnapshot(
+            exportedAt: Date(),
+            activeSessionId: activeSessionId,
+            surface: String(describing: surface),
+            permissionQueueCount: permissionQueue.count,
+            questionQueueCount: questionQueue.count,
+            sessions: sessions
+        )
     }
 
     private func startCleanupTimer() {
@@ -186,6 +261,33 @@ final class AppState {
         processMonitors.removeValue(forKey: sessionId)
     }
 
+    private func scheduleTerminalIndexPersist(sessionId: String) {
+        pendingTerminalIndexSessionIds.insert(sessionId)
+        guard terminalIndexFlushTask == nil else { return }
+        terminalIndexFlushTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            await MainActor.run {
+                self?.flushPendingTerminalIndexPersist()
+            }
+        }
+    }
+
+    func flushPendingTerminalIndexPersist() {
+        terminalIndexFlushTask?.cancel()
+        terminalIndexFlushTask = nil
+        guard !pendingTerminalIndexSessionIds.isEmpty else { return }
+
+        let sessionIds = pendingTerminalIndexSessionIds
+        pendingTerminalIndexSessionIds.removeAll()
+
+        let batch = sessionIds.reduce(into: [String: SessionSnapshot]()) { partial, sessionId in
+            if let session = sessions[sessionId] {
+                partial[sessionId] = session
+            }
+        }
+        sessionTerminalIndexStore.persist(sessions: batch)
+    }
+
     /// Remove a session, clean up its monitor, and resume any pending continuations.
     /// Every removal path (cleanup timer, process exit, reducer effect) goes through here
     /// so leaked continuations / connections are impossible.
@@ -193,12 +295,18 @@ final class AppState {
         // Resume ALL pending continuations for this session
         drainPermissions(forSession: sessionId)
         drainQuestions(forSession: sessionId)
+        let providerSessionId = sessions[sessionId]?.providerSessionId
 
         if surface.sessionId == sessionId {
             showNextPending()
         }
         sessions.removeValue(forKey: sessionId)
         stopMonitor(sessionId)
+        codexLatestTurnIds.removeValue(forKey: sessionId)
+        pendingTerminalIndexSessionIds.remove(sessionId)
+        if let providerSessionId {
+            codexLatestTurnIds.removeValue(forKey: providerSessionId)
+        }
         if activeSessionId == sessionId {
             activeSessionId = mostActiveSessionId()
         }
@@ -393,6 +501,102 @@ final class AppState {
         mostActiveSessionId() ?? sessions.keys.sorted().first
     }
 
+    var canContinueActiveCodexSession: Bool {
+        guard let sessionId = activeSessionId, let session = sessions[sessionId], session.source == "codex" else {
+            return false
+        }
+        guard pendingPermission?.event.sessionId != sessionId else { return false }
+        guard pendingQuestion?.event.sessionId != sessionId else { return false }
+        let threadId = session.providerSessionId ?? sessionId
+        return codexLatestTurnIds[threadId] != nil || codexLatestTurnIds[sessionId] != nil
+    }
+
+    func sendPromptToActiveSession(_ text: String) {
+        guard let sessionId = activeSessionId else { return }
+        sendPromptToSession(sessionId, text: text)
+    }
+
+    func sendPromptToSession(_ sessionId: String, text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              var session = sessions[sessionId],
+              session.source == "codex" else { return }
+
+        let threadId = session.providerSessionId ?? sessionId
+        guard let expectedTurnId = codexLatestTurnIds[threadId] ?? codexLatestTurnIds[sessionId] else {
+            requestCodexRefresh(minimumInterval: 0)
+            return
+        }
+
+        session.status = .processing
+        session.lastActivity = Date()
+        session.lastUserPrompt = trimmed
+        session.currentTool = nil
+        session.toolDescription = nil
+        session.addRecentMessage(ChatMessage(isUser: true, text: trimmed))
+        sessions[sessionId] = session
+        activeSessionId = sessionId
+        if case .collapsed = surface {
+            withAnimation(NotchAnimation.open) {
+                surface = .sessionList
+            }
+        }
+        scheduleTerminalIndexPersist(sessionId: sessionId)
+        scheduleSave()
+        startRotationIfNeeded()
+        refreshDerivedState()
+
+        Task { [weak self] in
+            do {
+                try await CodexAppServerClient.shared.continueThread(
+                    threadId: threadId,
+                    expectedTurnId: expectedTurnId,
+                    text: trimmed
+                )
+                await MainActor.run {
+                    self?.requestCodexRefresh(minimumInterval: 0)
+                }
+            } catch {
+                await MainActor.run {
+                    log.error("Codex continue failed for \(threadId, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                    self?.sessions[sessionId]?.status = .idle
+                    self?.refreshDerivedState()
+                }
+            }
+        }
+    }
+
+    @discardableResult
+    func focusSession(sessionId: String) -> Bool {
+        guard sessions[sessionId] != nil else { return false }
+        activeSessionId = sessionId
+        withAnimation(NotchAnimation.open) {
+            surface = .sessionList
+        }
+        startRotationIfNeeded()
+        refreshDerivedState()
+        return true
+    }
+
+    @discardableResult
+    func focusSession(cwd: String?, source: String?) -> String? {
+        let normalizedCwd = nonEmpty(cwd)
+        let normalizedSource = nonEmpty(source)?.lowercased()
+
+        let match = sessions
+            .filter { _, session in
+                let cwdMatches = normalizedCwd == nil || session.cwd == normalizedCwd
+                let sourceMatches = normalizedSource == nil || session.source == normalizedSource
+                return cwdMatches && sourceMatches
+            }
+            .max { lhs, rhs in
+                lhs.value.lastActivity < rhs.value.lastActivity
+            }?.key
+
+        guard let match, focusSession(sessionId: match) else { return nil }
+        return match
+    }
+
     /// Recompute cached status/source/counts from sessions in a single O(n) pass.
     /// Call after any mutation to `sessions` or session status.
     private func refreshDerivedState() {
@@ -470,6 +674,7 @@ final class AppState {
         for sessionId in previewSessionIDs {
             sessions.removeValue(forKey: sessionId)
             stopMonitor(sessionId)
+            pendingTerminalIndexSessionIds.remove(sessionId)
         }
 
         previewQuestionPayload = nil
@@ -492,6 +697,9 @@ final class AppState {
 
     func clearAllSessionRecords() {
         cancelCompletionQueue()
+        terminalIndexFlushTask?.cancel()
+        terminalIndexFlushTask = nil
+        pendingTerminalIndexSessionIds.removeAll()
 
         for key in Array(processMonitors.keys) {
             stopMonitor(key)
@@ -505,11 +713,202 @@ final class AppState {
         activeSessionId = nil
         rotatingSessionId = nil
         surface = .collapsed
+        codexLatestTurnIds.removeAll()
 
         SessionPersistence.clear()
         sessionTerminalIndexStore.clear()
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.historicalSessionsClearedAtKey)
 
+        refreshDerivedState()
+    }
+
+    private func handleCodexPermissionNotification(_ note: Notification) {
+        guard let userInfo = note.userInfo,
+              let threadId = userInfo["threadId"] as? String,
+              let toolName = userInfo["toolName"] as? String else { return }
+
+        let prompt = nonEmpty(userInfo["prompt"] as? String)
+        let stringToolInput = userInfo["toolInput"] as? [String: String]
+        let toolInput = stringToolInput?.reduce(into: [String: Any]()) { partial, entry in
+            partial[entry.key] = entry.value
+        }
+        var rawJSON: [String: Any] = ["_source": "codex"]
+        if let prompt {
+            rawJSON["message"] = prompt
+        }
+        if let cwd = nonEmpty(stringToolInput?["cwd"]) {
+            rawJSON["cwd"] = cwd
+        }
+
+        let event = HookEvent(
+            eventName: "PermissionRequest",
+            sessionId: threadId,
+            toolName: toolName,
+            toolInput: toolInput,
+            rawJSON: rawJSON
+        )
+
+        let request = PermissionRequest(
+            event: event,
+            approveAction: { [weak self] always in
+                Task {
+                    await CodexAppServerClient.shared.approve(threadId: threadId, forSession: always)
+                    await MainActor.run {
+                        guard let self else { return }
+                        self.requestCodexRefresh(minimumInterval: 0)
+                    }
+                }
+            },
+            denyAction: { [weak self] in
+                Task {
+                    await CodexAppServerClient.shared.deny(threadId: threadId)
+                    await MainActor.run {
+                        guard let self else { return }
+                        self.requestCodexRefresh(minimumInterval: 0)
+                    }
+                }
+            }
+        )
+
+        enqueueCodexPermissionRequest(request, event: event, sessionId: threadId)
+    }
+
+    private func handleCodexQuestionNotification(_ note: Notification) {
+        guard let userInfo = note.userInfo,
+              let threadId = userInfo["threadId"] as? String,
+              let prompt = userInfo["prompt"] as? String else { return }
+
+        let options = userInfo["options"] as? [String]
+        let descriptions = userInfo["descriptions"] as? [String]
+        let header = nonEmpty(userInfo["header"] as? String)
+        var toolInput: [String: Any] = ["question": prompt]
+        if let options {
+            toolInput["options"] = options
+        }
+        if let header {
+            toolInput["header"] = header
+        }
+        var rawJSON: [String: Any] = [
+            "_source": "codex",
+            "question": prompt,
+        ]
+        if let options {
+            rawJSON["options"] = options
+        }
+
+        let event = HookEvent(
+            eventName: "AskUserQuestion",
+            sessionId: threadId,
+            toolName: "requestUserInput",
+            toolInput: toolInput,
+            rawJSON: rawJSON
+        )
+        let payload = QuestionPayload(
+            question: prompt,
+            options: options,
+            descriptions: descriptions,
+            header: header
+        )
+
+        let request = QuestionRequest(
+            event: event,
+            question: payload,
+            isFromPermission: false,
+            answerAction: { [weak self] answer in
+                Task {
+                    await CodexAppServerClient.shared.answer(threadId: threadId, answer: answer)
+                    await MainActor.run {
+                        guard let self else { return }
+                        self.requestCodexRefresh(minimumInterval: 0)
+                    }
+                }
+            },
+            skipAction: { [weak self] in
+                Task {
+                    await CodexAppServerClient.shared.skipQuestion(threadId: threadId)
+                    await MainActor.run {
+                        guard let self else { return }
+                        self.requestCodexRefresh(minimumInterval: 0)
+                    }
+                }
+            }
+        )
+
+        enqueueCodexQuestionRequest(request, event: event, sessionId: threadId)
+    }
+
+    private func handleCodexRefreshNotification(_ note: Notification) {
+        let threadId = nonEmpty(note.userInfo?["threadId"] as? String)
+        guard let threadId else {
+            requestCodexRefresh(minimumInterval: 0)
+            return
+        }
+        let trackedSessionId = trackedSessionId(forCodexThreadId: threadId, cwd: nil) ?? threadId
+        if sessions[trackedSessionId] == nil {
+            sessions[trackedSessionId] = SessionSnapshot()
+            sessions[trackedSessionId]?.source = "codex"
+            sessions[trackedSessionId]?.providerSessionId = threadId
+        }
+        requestCodexRefresh(minimumInterval: 0)
+    }
+
+    private func enqueueCodexPermissionRequest(_ request: PermissionRequest, event: HookEvent, sessionId: String) {
+        if sessions[sessionId] == nil {
+            sessions[sessionId] = SessionSnapshot()
+        }
+
+        let codexPermissionCwd = sessions[sessionId]?.cwd ?? nonEmpty(event.rawJSON["cwd"] as? String)
+        sessions[sessionId]?.source = "codex"
+        sessions[sessionId]?.providerSessionId = sessionId
+        sessions[sessionId]?.cwd = codexPermissionCwd
+        sessions[sessionId]?.status = .waitingApproval
+        sessions[sessionId]?.currentTool = event.toolName
+        sessions[sessionId]?.toolDescription = event.toolDescription
+        sessions[sessionId]?.lastActivity = Date()
+
+        drainQuestions(forSession: sessionId)
+        drainPermissions(forSession: sessionId)
+        permissionQueue.append(request)
+
+        if sessions[sessionId] != nil {
+            scheduleTerminalIndexPersist(sessionId: sessionId)
+        }
+
+        activeSessionId = sessionId
+        surface = .approvalCard(sessionId: sessionId)
+        SoundManager.shared.handleEvent("PermissionRequest")
+        scheduleSave()
+        startRotationIfNeeded()
+        refreshDerivedState()
+    }
+
+    private func enqueueCodexQuestionRequest(_ request: QuestionRequest, event: HookEvent, sessionId: String) {
+        if sessions[sessionId] == nil {
+            sessions[sessionId] = SessionSnapshot()
+        }
+
+        let codexQuestionCwd = sessions[sessionId]?.cwd ?? nonEmpty(event.rawJSON["cwd"] as? String)
+        sessions[sessionId]?.source = "codex"
+        sessions[sessionId]?.providerSessionId = sessionId
+        sessions[sessionId]?.cwd = codexQuestionCwd
+        sessions[sessionId]?.status = .waitingQuestion
+        sessions[sessionId]?.lastActivity = Date()
+
+        drainPermissions(forSession: sessionId)
+        drainQuestions(forSession: sessionId)
+        questionQueue.append(request)
+
+        if sessions[sessionId] != nil {
+            scheduleTerminalIndexPersist(sessionId: sessionId)
+        }
+
+        activeSessionId = sessionId
+        withAnimation(NotchAnimation.open) {
+            surface = .questionCard(sessionId: sessionId)
+        }
+        SoundManager.shared.handleEvent("PermissionRequest")
+        scheduleSave()
+        startRotationIfNeeded()
         refreshDerivedState()
     }
 
@@ -521,6 +920,17 @@ final class AppState {
         }
 
         let sessionId = event.sessionId ?? "default"
+
+        if SessionFilter.shouldIgnoreSession(
+            source: event.rawJSON["_source"] as? String,
+            cwd: event.rawJSON["cwd"] as? String,
+            termBundleId: event.rawJSON["_term_bundle"] as? String
+        ) {
+            if sessions[sessionId] != nil {
+                removeSession(sessionId)
+            }
+            return
+        }
 
         // Skip Codex APP internal sessions (title generation, etc.) — they have no transcript
         if (event.rawJSON["_source"] as? String) == "codex"
@@ -580,8 +990,12 @@ final class AppState {
             refreshProviderTitle(for: sessionId)
         }
 
-        if let session = sessions[sessionId] {
-            sessionTerminalIndexStore.persist(sessionId: sessionId, session: session)
+        if sessions[sessionId] != nil {
+            scheduleTerminalIndexPersist(sessionId: sessionId)
+        }
+
+        if sessions[sessionId]?.source == "codex" {
+            requestCodexRefresh(minimumInterval: 1.0)
         }
 
         // Handle the "else if activeSessionId == sessionId → mostActive" edge case
@@ -637,8 +1051,8 @@ final class AppState {
         let request = PermissionRequest(event: event, continuation: continuation)
         permissionQueue.append(request)
 
-        if let session = sessions[sessionId] {
-            sessionTerminalIndexStore.persist(sessionId: sessionId, session: session)
+        if sessions[sessionId] != nil {
+            scheduleTerminalIndexPersist(sessionId: sessionId)
         }
 
         // Show UI only if this is the first (or only) queued item
@@ -653,31 +1067,36 @@ final class AppState {
     func approvePermission(always: Bool = false) {
         guard !permissionQueue.isEmpty else { return }
         let pending = permissionQueue.removeFirst()
-        let responseData: Data
-        if always {
-            let toolName = pending.event.toolName ?? ""
-            let obj: [String: Any] = [
-                "hookSpecificOutput": [
-                    "hookEventName": "PermissionRequest",
-                    "decision": [
-                        "behavior": "allow",
-                        "updatedPermissions": [[
-                            "type": "addRules",
-                            "rules": [["toolName": toolName, "ruleContent": "*"]],
-                            "behavior": "allow",
-                            "destination": "session"
-                        ]]
-                    ] as [String: Any]
-                ] as [String: Any]
-            ]
-            responseData = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data("{}".utf8)
+        if let approveAction = pending.approveAction {
+            approveAction(always)
         } else {
-            let response = #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#
-            responseData = Data(response.utf8)
+            let responseData: Data
+            if always {
+                let toolName = pending.event.toolName ?? ""
+                let obj: [String: Any] = [
+                    "hookSpecificOutput": [
+                        "hookEventName": "PermissionRequest",
+                        "decision": [
+                            "behavior": "allow",
+                            "updatedPermissions": [[
+                                "type": "addRules",
+                                "rules": [["toolName": toolName, "ruleContent": "*"]],
+                                "behavior": "allow",
+                                "destination": "session",
+                            ]],
+                        ] as [String: Any],
+                    ] as [String: Any],
+                ]
+                responseData = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data("{}".utf8)
+            } else {
+                let response = #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#
+                responseData = Data(response.utf8)
+            }
+            pending.continuation?.resume(returning: responseData)
         }
-        pending.continuation.resume(returning: responseData)
         let sessionId = pending.event.sessionId ?? "default"
-        sessions[sessionId]?.status = .running
+        let nextStatus: AgentStatus = sessions[sessionId]?.source == "codex" ? .processing : .running
+        sessions[sessionId]?.status = nextStatus
 
         showNextPending()
         refreshDerivedState()
@@ -686,10 +1105,15 @@ final class AppState {
     func denyPermission() {
         guard !permissionQueue.isEmpty else { return }
         let pending = permissionQueue.removeFirst()
-        let response = #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny"}}}"#
-        pending.continuation.resume(returning: Data(response.utf8))
+        if let denyAction = pending.denyAction {
+            denyAction()
+        } else {
+            let response = #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny"}}}"#
+            pending.continuation?.resume(returning: Data(response.utf8))
+        }
         let sessionId = pending.event.sessionId ?? "default"
-        sessions[sessionId]?.status = .idle
+        let nextStatus: AgentStatus = sessions[sessionId]?.source == "codex" ? .processing : .idle
+        sessions[sessionId]?.status = nextStatus
         sessions[sessionId]?.currentTool = nil
         sessions[sessionId]?.toolDescription = nil
 
@@ -721,8 +1145,8 @@ final class AppState {
         let request = QuestionRequest(event: event, question: question, continuation: continuation)
         questionQueue.append(request)
 
-        if let session = sessions[sessionId] {
-            sessionTerminalIndexStore.persist(sessionId: sessionId, session: session)
+        if sessions[sessionId] != nil {
+            scheduleTerminalIndexPersist(sessionId: sessionId)
         }
 
         if questionQueue.count == 1 {
@@ -775,8 +1199,8 @@ final class AppState {
         let request = QuestionRequest(event: event, question: payload, continuation: continuation, isFromPermission: true)
         questionQueue.append(request)
 
-        if let session = sessions[sessionId] {
-            sessionTerminalIndexStore.persist(sessionId: sessionId, session: session)
+        if sessions[sessionId] != nil {
+            scheduleTerminalIndexPersist(sessionId: sessionId)
         }
 
         if questionQueue.count == 1 {
@@ -792,31 +1216,35 @@ final class AppState {
     func answerQuestion(_ answer: String) {
         guard !questionQueue.isEmpty else { return }
         let pending = questionQueue.removeFirst()
-        let responseData: Data
-        if pending.isFromPermission {
-            let answerKey = pending.question.header ?? "answer"
-            let obj: [String: Any] = [
-                "hookSpecificOutput": [
-                    "hookEventName": "PermissionRequest",
-                    "decision": [
-                        "behavior": "allow",
-                        "updatedInput": [
-                            "answers": [answerKey: answer]
-                        ]
-                    ] as [String: Any]
-                ] as [String: Any]
-            ]
-            responseData = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data("{}".utf8)
+        if let answerAction = pending.answerAction {
+            answerAction(answer)
         } else {
-            let obj: [String: Any] = [
-                "hookSpecificOutput": [
-                    "hookEventName": "Notification",
-                    "answer": answer
-                ] as [String: Any]
-            ]
-            responseData = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data("{}".utf8)
+            let responseData: Data
+            if pending.isFromPermission {
+                let answerKey = pending.question.header ?? "answer"
+                let obj: [String: Any] = [
+                    "hookSpecificOutput": [
+                        "hookEventName": "PermissionRequest",
+                        "decision": [
+                            "behavior": "allow",
+                            "updatedInput": [
+                                "answers": [answerKey: answer],
+                            ],
+                        ] as [String: Any],
+                    ] as [String: Any],
+                ]
+                responseData = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data("{}".utf8)
+            } else {
+                let obj: [String: Any] = [
+                    "hookSpecificOutput": [
+                        "hookEventName": "Notification",
+                        "answer": answer,
+                    ] as [String: Any],
+                ]
+                responseData = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data("{}".utf8)
+            }
+            pending.continuation?.resume(returning: responseData)
         }
-        pending.continuation.resume(returning: responseData)
         let sessionId = pending.event.sessionId ?? "default"
         sessions[sessionId]?.status = .processing
 
@@ -827,13 +1255,17 @@ final class AppState {
     func skipQuestion() {
         guard !questionQueue.isEmpty else { return }
         let pending = questionQueue.removeFirst()
-        let responseData: Data
-        if pending.isFromPermission {
-            responseData = Data(#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny"}}}"#.utf8)
+        if let skipAction = pending.skipAction {
+            skipAction()
         } else {
-            responseData = Data(#"{"hookSpecificOutput":{"hookEventName":"Notification"}}"#.utf8)
+            let responseData: Data
+            if pending.isFromPermission {
+                responseData = Data(#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny"}}}"#.utf8)
+            } else {
+                responseData = Data(#"{"hookSpecificOutput":{"hookEventName":"Notification"}}"#.utf8)
+            }
+            pending.continuation?.resume(returning: responseData)
         }
-        pending.continuation.resume(returning: responseData)
         let sessionId = pending.event.sessionId ?? "default"
         sessions[sessionId]?.status = .processing
 
@@ -846,7 +1278,11 @@ final class AppState {
         let denyResponse = Data(#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny"}}}"#.utf8)
         permissionQueue.removeAll { item in
             guard item.event.sessionId == sessionId else { return false }
-            item.continuation.resume(returning: denyResponse)
+            if let denyAction = item.denyAction {
+                denyAction()
+            } else {
+                item.continuation?.resume(returning: denyResponse)
+            }
             return true
         }
     }
@@ -873,7 +1309,11 @@ final class AppState {
     private func drainQuestions(forSession sessionId: String) {
         questionQueue.removeAll { item in
             guard item.event.sessionId == sessionId else { return false }
-            item.continuation.resume(returning: Data("{}".utf8))
+            if let skipAction = item.skipAction {
+                skipAction()
+            } else {
+                item.continuation?.resume(returning: Data("{}".utf8))
+            }
             return true
         }
     }
@@ -962,16 +1402,27 @@ final class AppState {
         }
     }
 
-    func saveSessions() {
-        SessionPersistence.save(sessions)
+    func saveSessions(synchronously: Bool = false) {
+        let sessions = self.sessions
+        if synchronously {
+            SessionPersistence.save(sessions)
+            return
+        }
+
+        Task.detached(priority: .utility) {
+            SessionPersistence.save(sessions)
+        }
     }
 
-    private func restoreSessions() {
-        let persisted = SessionPersistence.load()
+    private func applyRestoredSessions(
+        persisted: [PersistedSession],
+        historicalCodexSessions: [(sessionId: String, snapshot: SessionSnapshot)] = []
+    ) {
         let cutoff = Date().addingTimeInterval(-30 * 60) // 30 minutes
         for p in persisted where p.lastActivity > cutoff {
             guard sessions[p.sessionId] == nil else { continue }
             guard let source = SessionSnapshot.normalizedSupportedSource(p.source) else { continue }
+            guard !SessionFilter.shouldIgnoreSession(source: source, cwd: p.cwd, termBundleId: p.termBundleId) else { continue }
             var snapshot = SessionSnapshot(startTime: p.startTime)
             snapshot.cwd = p.cwd
             snapshot.source = source
@@ -1027,10 +1478,16 @@ final class AppState {
                 }
             }
         }
-        SessionPersistence.clear()
 
-        if ConfigInstaller.isEnabled(source: "codex") {
-            restoreHistoricalCodexSessions()
+        for historical in historicalCodexSessions {
+            let clearedAt = UserDefaults.standard.double(forKey: Self.historicalSessionsClearedAtKey)
+            if clearedAt > 0, historical.snapshot.lastActivity.timeIntervalSince1970 <= clearedAt {
+                continue
+            }
+            guard sessions[historical.sessionId] == nil else { continue }
+            let snapshot = sessionTerminalIndexStore.hydrate(historical.snapshot, sessionId: historical.sessionId)
+            sessions[historical.sessionId] = snapshot
+            refreshProviderTitle(for: historical.sessionId, providerSessionId: historical.sessionId)
         }
 
         if activeSessionId == nil {
@@ -1040,23 +1497,24 @@ final class AppState {
         refreshDerivedState()
     }
 
-    private func restoreHistoricalCodexSessions() {
-        let clearedAt = UserDefaults.standard.double(forKey: Self.historicalSessionsClearedAtKey)
-        for historical in CodexSessionHistoryLoader.loadRecentSessions() {
-            if clearedAt > 0, historical.snapshot.lastActivity.timeIntervalSince1970 <= clearedAt {
-                continue
-            }
-            guard sessions[historical.sessionId] == nil else { continue }
-            let snapshot = sessionTerminalIndexStore.hydrate(historical.snapshot, sessionId: historical.sessionId)
-            sessions[historical.sessionId] = snapshot
-            refreshProviderTitle(for: historical.sessionId, providerSessionId: historical.sessionId)
-        }
-    }
-
     func startSessionDiscovery() {
         startCleanupTimer()
-        // Restore persisted sessions before process scan (deduped by scan)
-        restoreSessions()
+        startCodexRefreshLoop()
+        // Restore persisted state and historical Codex sessions off the main thread.
+        Task.detached(priority: .utility) {
+            let persisted = SessionPersistence.load()
+            let historicalCodexSessions = ConfigInstaller.isEnabled(source: "codex")
+                ? CodexSessionHistoryLoader.loadRecentSessions()
+                : []
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.applyRestoredSessions(
+                    persisted: persisted,
+                    historicalCodexSessions: historicalCodexSessions
+                )
+                SessionPersistence.clear()
+            }
+        }
 
         // Initial scan for already-running sessions (Claude + Codex), respecting user toggles
         Task.detached {
@@ -1123,7 +1581,14 @@ final class AppState {
     /// Merge discovered sessions into current state (skip already-known ones)
     private func integrateDiscovered(_ discovered: [DiscoveredSession]) {
         var didAdd = false
+        var discoveredCodex = false
         for info in discovered {
+            if info.source == "codex" {
+                discoveredCodex = true
+            }
+            if SessionFilter.shouldIgnoreSession(source: info.source, cwd: info.cwd, termBundleId: nil) {
+                continue
+            }
             // Session already known — try to attach PID monitor if missing
             if sessions[info.sessionId] != nil {
                 if processMonitors[info.sessionId] == nil, let pid = info.pid {
@@ -1177,16 +1642,21 @@ final class AppState {
             if let pid = info.pid {
                 monitorProcess(sessionId: info.sessionId, pid: pid)
             }
-            sessionTerminalIndexStore.persist(sessionId: info.sessionId, session: session)
+            scheduleTerminalIndexPersist(sessionId: info.sessionId)
             didAdd = true
         }
         if didAdd && activeSessionId == nil {
             activeSessionId = sessions.keys.sorted().first
         }
         refreshDerivedState()
+        if discoveredCodex {
+            requestCodexRefresh(minimumInterval: didAdd ? 0 : 2)
+        }
     }
 
     func stopSessionDiscovery() {
+        codexRefreshTask?.cancel()
+        codexRefreshTask = nil
         if let stream = fsEventStream {
             FSEventStreamStop(stream)
             FSEventStreamInvalidate(stream)
@@ -1198,11 +1668,22 @@ final class AppState {
 
     deinit {
         MainActor.assumeIsolated {
+            codexRefreshTask?.cancel()
+            terminalIndexFlushTask?.cancel()
             rotationTimer?.invalidate()
             cleanupTimer?.invalidate()
             saveTimer?.invalidate()
             if let usageSnapshotObserver {
                 NotificationCenter.default.removeObserver(usageSnapshotObserver)
+            }
+            if let codexPermissionObserver {
+                NotificationCenter.default.removeObserver(codexPermissionObserver)
+            }
+            if let codexQuestionObserver {
+                NotificationCenter.default.removeObserver(codexQuestionObserver)
+            }
+            if let codexRefreshObserver {
+                NotificationCenter.default.removeObserver(codexRefreshObserver)
             }
             if let stream = fsEventStream {
                 FSEventStreamStop(stream)
@@ -1210,6 +1691,163 @@ final class AppState {
                 FSEventStreamRelease(stream)
             }
             for (_, m) in processMonitors { m.source.cancel() }
+        }
+    }
+
+    private func startCodexRefreshLoop() {
+        codexRefreshTask?.cancel()
+        codexRefreshTask = Task { [weak self] in
+            guard let self else { return }
+            await self.refreshCodexThreadSnapshots()
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(8))
+                guard !Task.isCancelled else { return }
+                await self.refreshCodexThreadSnapshots()
+            }
+        }
+    }
+
+    private func requestCodexRefresh(minimumInterval: TimeInterval) {
+        guard Date().timeIntervalSince(lastCodexRefreshAt) >= minimumInterval else { return }
+        guard !codexRefreshInFlight else { return }
+        Task { [weak self] in
+            await self?.refreshCodexThreadSnapshots()
+        }
+    }
+
+    private func refreshCodexThreadSnapshots() async {
+        guard ConfigInstaller.isEnabled(source: "codex") else { return }
+        let threadIds = trackedCodexThreadIds()
+        guard !threadIds.isEmpty else { return }
+        guard !codexRefreshInFlight else { return }
+
+        codexRefreshInFlight = true
+        defer {
+            codexRefreshInFlight = false
+            lastCodexRefreshAt = Date()
+        }
+
+        var didChange = false
+        for threadId in threadIds.prefix(8) {
+            guard sessions.values.contains(where: { $0.source == "codex" }) else { break }
+            do {
+                let snapshot = try await CodexAppServerClient.shared.readThread(threadId: threadId)
+                didChange = applyCodexThreadSnapshot(snapshot) || didChange
+            } catch {
+                log.debug("Codex app-server refresh failed for \(threadId, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+        }
+
+        if didChange {
+            scheduleSave()
+            startRotationIfNeeded()
+            refreshDerivedState()
+        }
+    }
+
+    private func trackedCodexThreadIds() -> [String] {
+        var seen: Set<String> = []
+        return sessions
+            .filter { $0.value.source == "codex" }
+            .sorted { $0.value.lastActivity > $1.value.lastActivity }
+            .compactMap { sessionId, session in
+                let threadId = session.providerSessionId ?? sessionId
+                guard seen.insert(threadId).inserted else { return nil }
+                return threadId
+            }
+    }
+
+    private func applyCodexThreadSnapshot(_ snapshot: CodexAppThreadSnapshot) -> Bool {
+        let trackedSessionId = trackedSessionId(forCodexThreadId: snapshot.threadId, cwd: snapshot.cwd) ?? snapshot.threadId
+        var session = sessions[trackedSessionId] ?? SessionSnapshot(startTime: snapshot.updatedAt)
+        let previous = session
+
+        session.source = "codex"
+        session.providerSessionId = snapshot.threadId
+        session.cwd = snapshot.cwd ?? session.cwd
+        session.lastActivity = max(session.lastActivity, snapshot.updatedAt)
+        session.status = resolvedCodexStatus(
+            desired: snapshot.status,
+            trackedSessionId: trackedSessionId,
+            providerSessionId: snapshot.threadId
+        )
+        if let title = snapshot.title {
+            session.sessionTitle = title
+            session.sessionTitleSource = .codexThreadName
+        }
+        if let text = snapshot.lastUserText {
+            session.lastUserPrompt = text
+        }
+        if let text = snapshot.lastAssistantText {
+            session.lastAssistantMessage = text
+        }
+        if !snapshot.recentMessages.isEmpty {
+            session.recentMessages = snapshot.recentMessages
+        }
+        if let latestTurnId = nonEmpty(snapshot.latestTurnId) {
+            codexLatestTurnIds[snapshot.threadId] = latestTurnId
+            codexLatestTurnIds[trackedSessionId] = latestTurnId
+        }
+
+        sessions[trackedSessionId] = session
+        scheduleTerminalIndexPersist(sessionId: trackedSessionId)
+        if snapshot.title == nil {
+            refreshProviderTitle(for: trackedSessionId, providerSessionId: snapshot.threadId)
+        }
+        if activeSessionId == nil {
+            activeSessionId = trackedSessionId
+        }
+        return codexSessionChanged(previous: previous, current: session)
+    }
+
+    private func trackedSessionId(forCodexThreadId threadId: String, cwd: String?) -> String? {
+        if let session = sessions[threadId], session.source == "codex" {
+            return threadId
+        }
+
+        if let match = sessions.first(where: { sessionId, session in
+            session.source == "codex"
+                && (sessionId == threadId || session.providerSessionId == threadId)
+        })?.key {
+            return match
+        }
+
+        if let cwd {
+            return sessions.first(where: { _, session in
+                session.source == "codex" && session.cwd == cwd
+            })?.key
+        }
+
+        return nil
+    }
+
+    private func resolvedCodexStatus(desired: AgentStatus, trackedSessionId: String, providerSessionId: String) -> AgentStatus {
+        let identifiers = Set([trackedSessionId, providerSessionId])
+        if permissionQueue.contains(where: { identifiers.contains($0.event.sessionId ?? "") }) {
+            return .waitingApproval
+        }
+        if questionQueue.contains(where: { identifiers.contains($0.event.sessionId ?? "") }) {
+            return .waitingQuestion
+        }
+        return desired
+    }
+
+    private func codexSessionChanged(previous: SessionSnapshot, current: SessionSnapshot) -> Bool {
+        previous.status != current.status
+            || previous.cwd != current.cwd
+            || previous.lastActivity != current.lastActivity
+            || previous.lastUserPrompt != current.lastUserPrompt
+            || previous.lastAssistantMessage != current.lastAssistantMessage
+            || recentMessagesChanged(previous.recentMessages, current.recentMessages)
+            || previous.sessionTitle != current.sessionTitle
+            || previous.sessionTitleSource != current.sessionTitleSource
+            || previous.providerSessionId != current.providerSessionId
+    }
+
+    private func recentMessagesChanged(_ lhs: [ChatMessage], _ rhs: [ChatMessage]) -> Bool {
+        guard lhs.count == rhs.count else { return true }
+        return zip(lhs, rhs).contains { left, right in
+            left.isUser != right.isUser || left.text != right.text
         }
     }
 
@@ -1241,6 +1879,10 @@ final class AppState {
 
             // Skip subagent worktrees — they are child tasks, not independent sessions
             if cwd.contains("/.claude/worktrees/agent-") || cwd.contains("/.git/worktrees/agent-") {
+                continue
+            }
+
+            if SessionFilter.shouldIgnoreSession(source: "claude", cwd: cwd, termBundleId: nil) {
                 continue
             }
 

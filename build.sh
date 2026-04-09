@@ -29,7 +29,7 @@ lipo -create "$ARM_DIR/codeisland-bridge" "$X86_DIR/codeisland-bridge" \
 cp Info.plist "$APP_BUNDLE/Contents/Info.plist"
 
 echo "Compiling app icon assets..."
-xcrun actool \
+if ! xcrun actool \
     --output-format human-readable-text \
     --warnings \
     --errors \
@@ -41,7 +41,9 @@ xcrun actool \
     --output-partial-info-plist "$ICON_INFO_PLIST" \
     --compile "$APP_BUNDLE/Contents/Resources" \
     "$ICON_CATALOG" \
-    "$ICON_SOURCE"
+    "$ICON_SOURCE"; then
+    echo "warning: actool failed, continuing without compiled icon assets"
+fi
 
 # Copy SPM resource bundles — place at .app root where Bundle.module expects them
 for bundle in .build/*/release/*.bundle; do
@@ -52,8 +54,12 @@ for bundle in .build/*/release/*.bundle; do
 done
 
 echo "Ad-hoc code signing..."
-codesign --force --sign - "$APP_BUNDLE/Contents/Helpers/codeisland-bridge"
-codesign --force --sign - "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+if ! codesign --force --sign - "$APP_BUNDLE/Contents/Helpers/codeisland-bridge"; then
+    echo "warning: helper codesign failed, continuing with unsigned helper"
+fi
+if ! codesign --force --sign - "$APP_BUNDLE"; then
+    echo "warning: app bundle codesign failed, continuing with unsigned app bundle"
+fi
 
 echo "Done: $APP_BUNDLE"
 echo "Run: open $APP_BUNDLE"

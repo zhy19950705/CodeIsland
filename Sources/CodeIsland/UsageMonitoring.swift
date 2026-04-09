@@ -32,12 +32,19 @@ struct UsageWindowStat: Codable, Hashable, Sendable {
     var tintHex: String
 }
 
+struct UsageMonthlyStat: Codable, Hashable, Sendable {
+    var label: String
+    var totalTokens: Int
+    var costUSD: Double?
+}
+
 struct UsageProviderSnapshot: Codable, Hashable, Sendable, Identifiable {
     var source: UsageProviderSource
     var primary: UsageWindowStat
     var secondary: UsageWindowStat
     var updatedAtUnix: TimeInterval?
     var summary: String?
+    var monthly: UsageMonthlyStat?
 
     var id: String { source.rawValue }
 }

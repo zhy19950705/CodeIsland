@@ -1,0 +1,18 @@
+{
+  "id": "arcade-bingo",
+  "title": "街机 Bingo",
+  "subtitle": "命中、得分、1 秒回响",
+  "author": "Vibe Island",
+  "accentHex": "#7CE3A0",
+  "systemName": "star.circle.fill",
+  "sounds": {
+    "sessionStart": "sessionStart.wav",
+    "taskAcknowledge": "taskAcknowledge.wav",
+    "inputRequired": "inputRequired.wav",
+    "taskComplete": "taskComplete.wav",
+    "taskError": "taskError.wav",
+    "resourceLimit": "resourceLimit.wav",
+    "userSpam": "userSpam.wav",
+    "petting": "petting.wav"
+  }
+}

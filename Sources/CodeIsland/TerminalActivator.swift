@@ -33,19 +33,20 @@ struct TerminalActivator {
         "ai.opencode.desktop": "OpenCode",
     ]
 
-    static func activate(session: SessionSnapshot, sessionId: String? = nil) {
+    @discardableResult
+    static func activate(session: SessionSnapshot, sessionId: String? = nil) -> Bool {
         // Native app by bundle ID (e.g. Codex APP vs Codex CLI)
         if let bundleId = session.termBundleId,
            nativeAppBundles[bundleId] != nil {
             activateByBundleId(bundleId)
-            return
+            return true
         }
 
         // IDE integrated terminal: bring the IDE to front (no tab-level switching)
         if session.isIDETerminal,
            let bundleId = session.termBundleId {
             activateByBundleId(bundleId)
-            return
+            return true
         }
 
         // IDE sources: just bring the app to front
@@ -58,7 +59,7 @@ struct TerminalActivator {
             } else {
                 bringToFront(appName)
             }
-            return
+            return true
         }
 
         // Resolve terminal: bundle ID (most accurate) → TERM_PROGRAM → scan running apps
@@ -94,34 +95,36 @@ struct TerminalActivator {
         if lower.contains("iterm") {
             if let itermId = session.itermSessionId, !itermId.isEmpty {
                 activateITerm(sessionId: itermId)
+                return true
             } else {
                 bringToFront("iTerm2")
+                return false
             }
-            return
         }
 
         if lower == "ghostty" {
             activateGhostty(cwd: session.cwd, sessionId: sessionId, source: session.source)
-            return
+            return (session.cwd?.isEmpty == false) || (sessionId?.isEmpty == false)
         }
 
         if lower.contains("terminal") || lower.contains("apple_terminal") {
             activateTerminalApp(ttyPath: effectiveTty)
-            return
+            return effectiveTty?.isEmpty == false
         }
 
         if lower.contains("wezterm") || lower.contains("wez") {
             activateWezTerm(ttyPath: effectiveTty, cwd: session.cwd)
-            return
+            return effectiveTty?.isEmpty == false || session.cwd?.isEmpty == false
         }
 
         if lower.contains("kitty") {
             activateKitty(windowId: session.kittyWindowId, cwd: session.cwd, source: session.source)
-            return
+            return session.kittyWindowId?.isEmpty == false || session.cwd?.isEmpty == false
         }
 
         // --- App-level only (Alacritty, Warp, Hyper, Tabby, Rio, etc.) ---
         bringToFront(termApp)
+        return false
     }
 
     // MARK: - Ghostty (AppleScript: match by CWD + session ID in title)

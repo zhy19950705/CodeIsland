@@ -17,6 +17,12 @@ struct PersistedSession: Codable {
     let kittyWindowId: String?
     let tmuxPane: String?
     let tmuxClientTty: String?
+    let cmuxWorkspaceRef: String?
+    let cmuxSurfaceRef: String?
+    let cmuxPaneRef: String?
+    let cmuxWorkspaceId: String?
+    let cmuxSurfaceId: String?
+    let cmuxSocketPath: String?
     let termBundleId: String?
     let cliPid: Int32?
     let startTime: Date
@@ -28,8 +34,9 @@ enum SessionPersistence {
     private static let filePath = dirPath + "/sessions.json"
 
     static func save(_ sessions: [String: SessionSnapshot]) {
-        let persisted = sessions.map { (id, s) in
-            PersistedSession(
+        let persisted: [PersistedSession] = sessions.compactMap { (id, s) in
+            guard !s.isHistoricalSnapshot else { return nil }
+            return PersistedSession(
                 sessionId: id,
                 cwd: s.cwd,
                 source: s.source,
@@ -45,6 +52,12 @@ enum SessionPersistence {
                 kittyWindowId: s.kittyWindowId,
                 tmuxPane: s.tmuxPane,
                 tmuxClientTty: s.tmuxClientTty,
+                cmuxWorkspaceRef: s.cmuxWorkspaceRef,
+                cmuxSurfaceRef: s.cmuxSurfaceRef,
+                cmuxPaneRef: s.cmuxPaneRef,
+                cmuxWorkspaceId: s.cmuxWorkspaceId,
+                cmuxSurfaceId: s.cmuxSurfaceId,
+                cmuxSocketPath: s.cmuxSocketPath,
                 termBundleId: s.termBundleId,
                 cliPid: s.cliPid,
                 startTime: s.startTime,
@@ -56,7 +69,7 @@ enum SessionPersistence {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             let data = try encoder.encode(persisted)
-            try data.write(to: URL(fileURLWithPath: filePath), options: .atomic)
+            try data.write(to: URL(fileURLWithPath: filePath), options: Data.WritingOptions.atomic)
         } catch {}
     }
 

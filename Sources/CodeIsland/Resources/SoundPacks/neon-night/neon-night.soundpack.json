@@ -1,0 +1,18 @@
+{
+  "id": "neon-night",
+  "title": "夜机霓虹",
+  "subtitle": "更亮、更飘、更夜场",
+  "author": "Vibe Island",
+  "accentHex": "#A991FF",
+  "systemName": "sparkles.tv.fill",
+  "sounds": {
+    "sessionStart": "sessionStart.wav",
+    "taskAcknowledge": "taskAcknowledge.wav",
+    "inputRequired": "inputRequired.wav",
+    "taskComplete": "taskComplete.wav",
+    "taskError": "taskError.wav",
+    "resourceLimit": "resourceLimit.wav",
+    "userSpam": "userSpam.wav",
+    "petting": "petting.wav"
+  }
+}

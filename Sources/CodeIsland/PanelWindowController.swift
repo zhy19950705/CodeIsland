@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import os.log
+import CodeIslandCore
 
 private let log = Logger(subsystem: "com.codeisland", category: "Panel")
 
@@ -16,6 +17,11 @@ private class KeyablePanel: NSPanel {
 private class NotchHostingView<Content: View>: NSHostingView<Content> {
     /// When true, the deferred handler is setting super — don't re-defer.
     private var applyingDeferred = false
+    /// Coalesce repeated invalidations so view churn can't enqueue unbounded main-queue blocks.
+    private var pendingNeedsUpdateConstraints: Bool?
+    private var pendingNeedsLayout: Bool?
+    private var hasScheduledNeedsUpdateConstraints = false
+    private var hasScheduledNeedsLayout = false
 
     override func mouseDown(with event: NSEvent) {
         window?.makeKey()
@@ -36,10 +42,21 @@ private class NotchHostingView<Content: View>: NSHostingView<Content> {
                 super.needsUpdateConstraints = newValue
                 return
             }
+            pendingNeedsUpdateConstraints = newValue
+            guard !hasScheduledNeedsUpdateConstraints else { return }
+            hasScheduledNeedsUpdateConstraints = true
             DispatchQueue.main.async { [weak self] in
-                self?.applySuperNeedsUpdateConstraints(newValue)
+                self?.flushDeferredNeedsUpdateConstraints()
             }
         }
+    }
+
+    private func flushDeferredNeedsUpdateConstraints() {
+        hasScheduledNeedsUpdateConstraints = false
+        guard let pendingNeedsUpdateConstraints else { return }
+        self.pendingNeedsUpdateConstraints = nil
+        guard super.needsUpdateConstraints != pendingNeedsUpdateConstraints else { return }
+        applySuperNeedsUpdateConstraints(pendingNeedsUpdateConstraints)
     }
 
     private func applySuperNeedsUpdateConstraints(_ value: Bool) {
@@ -55,10 +72,21 @@ private class NotchHostingView<Content: View>: NSHostingView<Content> {
                 super.needsLayout = newValue
                 return
             }
+            pendingNeedsLayout = newValue
+            guard !hasScheduledNeedsLayout else { return }
+            hasScheduledNeedsLayout = true
             DispatchQueue.main.async { [weak self] in
-                self?.applySuperNeedsLayout(newValue)
+                self?.flushDeferredNeedsLayout()
             }
         }
+    }
+
+    private func flushDeferredNeedsLayout() {
+        hasScheduledNeedsLayout = false
+        guard let pendingNeedsLayout else { return }
+        self.pendingNeedsLayout = nil
+        guard super.needsLayout != pendingNeedsLayout else { return }
+        applySuperNeedsLayout(pendingNeedsLayout)
     }
 
     private func applySuperNeedsLayout(_ value: Bool) {
@@ -117,21 +145,27 @@ class PanelWindowController: NSObject, NSWindowDelegate {
     }
 
     private func panelSize(for screen: NSScreen) -> NSSize {
-        let maxSessions = CGFloat(max(2, UserDefaults.standard.integer(forKey: SettingsKey.maxVisibleSessions)))
-        let maxH = max(300, maxSessions * 90 + 60)
         let screenW = screen.frame.width
         let width = min(620, screenW - 40)
-        return NSSize(width: width, height: maxH)
+        let collapsedHeight = max(ScreenDetector.topBarHeight(for: screen) + 8, 38)
+
+        guard appState.surface.isExpanded else {
+            return NSSize(width: width, height: collapsedHeight)
+        }
+
+        let maxSessions = CGFloat(max(2, UserDefaults.standard.integer(forKey: SettingsKey.maxVisibleSessions)))
+        let estimatedHeight = max(300, maxSessions * 90 + 60)
+        let maxPanelHeight = CGFloat(max(220, SettingsManager.shared.maxPanelHeight))
+        let height = min(maxPanelHeight, max(collapsedHeight, estimatedHeight))
+        return NSSize(width: width, height: height)
     }
 
     private var panelSize: NSSize {
         panelSize(for: chosenScreen())
     }
 
-    private var visibilityTimer: Timer?
     private var autoScreenPoller: Timer?
     private var fullscreenPoller: Timer?
-    private var sessionObservationTask: Task<Void, Never>?
     private var fullscreenLatch = false
     private var settingsObservers: [NSObjectProtocol] = []
     private var globalClickMonitor: Any?
@@ -227,18 +261,17 @@ class PanelWindowController: NSObject, NSWindowDelegate {
             }
         }
 
-        // Observe session changes via @Observable tracking
-        sessionObservationTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                withObservationTracking {
-                    _ = self?.appState.sessions
-                    _ = self?.appState.surface
-                } onChange: {
-                    Task { @MainActor in self?.updateVisibility() }
-                }
-                try? await Task.sleep(for: .milliseconds(500))
+        let panelStateObserver = NotificationCenter.default.addObserver(
+            forName: .codeIslandPanelStateDidChange,
+            object: appState,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.updateVisibility()
+                self?.updatePositionIfNeeded()
             }
         }
+        settingsObservers.append(panelStateObserver)
 
         // Observe settings changes (display choice, panel height)
         observeSettingsChanges()
@@ -419,6 +452,14 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         panel.setFrame(panelFrame(for: screen), display: true)
     }
 
+    private func updatePositionIfNeeded() {
+        guard let panel = panel else { return }
+        let screen = chosenScreen()
+        let targetFrame = panelFrame(for: screen)
+        guard !approximatelyEqual(panel.frame, targetFrame) else { return }
+        panel.setFrame(targetFrame, display: true)
+    }
+
     private func panelFrame(for screen: NSScreen) -> NSRect {
         let size = panelSize(for: screen)
         let screenFrame = screen.frame
@@ -437,6 +478,13 @@ class PanelWindowController: NSObject, NSWindowDelegate {
 
     private func clampedX(_ desiredX: CGFloat, panelWidth: CGFloat, on screen: NSScreen) -> CGFloat {
         min(max(desiredX, screen.frame.minX), screen.frame.maxX - panelWidth)
+    }
+
+    private func approximatelyEqual(_ lhs: NSRect, _ rhs: NSRect, tolerance: CGFloat = 0.5) -> Bool {
+        abs(lhs.origin.x - rhs.origin.x) < tolerance
+            && abs(lhs.origin.y - rhs.origin.y) < tolerance
+            && abs(lhs.size.width - rhs.size.width) < tolerance
+            && abs(lhs.size.height - rhs.size.height) < tolerance
     }
 
     private func setupHorizontalDragMonitor() {
@@ -593,4 +641,8 @@ class PanelWindowController: NSObject, NSWindowDelegate {
             NSEvent.removeMonitor(monitor)
         }
     }
+}
+
+extension Notification.Name {
+    static let codeIslandPanelStateDidChange = Notification.Name("CodeIslandPanelStateDidChange")
 }

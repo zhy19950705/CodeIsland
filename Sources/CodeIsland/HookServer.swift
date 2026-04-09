@@ -102,6 +102,13 @@ class HookServer {
     ]
 
     private func processRequest(data: Data, connection: NWConnection) {
+        if let usageEnvelope = try? JSONDecoder().decode(UsageUpdateEnvelope.self, from: data),
+           usageEnvelope.type == "usage_update" {
+            _ = UsageSnapshotStore.save(usageEnvelope.usage)
+            sendResponse(connection: connection, data: Data("{}".utf8))
+            return
+        }
+
         guard let event = HookEvent(from: data) else {
             sendResponse(connection: connection, data: Data("{\"error\":\"parse_failed\"}".utf8))
             return

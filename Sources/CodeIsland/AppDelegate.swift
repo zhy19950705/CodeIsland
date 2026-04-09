@@ -21,6 +21,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ProcessInfo.processInfo.disableSuddenTermination()
         // Pre-set app icon so Dock/menu bar use the packaged bundle icon.
         NSApp.applicationIconImage = SettingsWindowController.bundleAppIcon()
+        SettingsWindowController.shared.bind(appState: appState)
         StatusItemController.shared.syncVisibility()
         // Start HookServer BEFORE installing hooks into CLI configs.
         // If we write settings.json first, Claude Code picks up the new hooks
@@ -37,6 +38,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         panelController = PanelWindowController(appState: appState)
         panelController?.showPanel()
+
+        let usageMonitorManager = UsageMonitorLaunchAgentManager()
+        do {
+            if try usageMonitorManager.repairIfNeeded() {
+                Self.log.info("Repaired usage monitor launch agent")
+            }
+        } catch {
+            Self.log.error("Failed to repair usage monitor: \(error.localizedDescription)")
+        }
+        appState.refreshUsageSnapshot()
 
         appState.startSessionDiscovery()
 
@@ -82,20 +93,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupGlobalShortcut()
         observeSettingsChanges()
 
-        // Boot animation: brief expand to confirm app is running
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            guard appState.surface == .collapsed else { return }
-            withAnimation(NotchAnimation.pop) {
-                appState.surface = .sessionList
-            }
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-            if case .sessionList = appState.surface {
-                withAnimation(NotchAnimation.close) {
-                    appState.surface = .collapsed
-                }
-            }
-        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -160,7 +157,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     appState.surface = .sessionList
                     appState.cancelCompletionQueue()
                     if appState.activeSessionId == nil {
-                        appState.activeSessionId = appState.sessions.keys.sorted().first
+                        appState.activeSessionId = appState.preferredSessionId
                     }
                 }
             }
@@ -174,7 +171,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             appState.skipQuestion()
         case .jumpToTerminal:
             if let id = appState.activeSessionId, let session = appState.sessions[id] {
-                TerminalActivator.activate(session: session, sessionId: id)
+                SessionJumpRouter.jump(to: session, sessionId: id)
             }
         }
     }

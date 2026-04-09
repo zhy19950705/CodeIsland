@@ -69,6 +69,83 @@ func runCommand(_ path: String, args: [String]) -> String? {
     }
 }
 
+func resolveCmuxEnvironment(_ env: [String: String]) -> [String: String] {
+    var resolved = env
+
+    let hasRef = [
+        resolved["CMUX_WORKSPACE_REF"],
+        resolved["CMUX_PANE_REF"],
+    ].contains { !($0?.isEmpty ?? true) }
+
+    if hasRef {
+        return resolved
+    }
+
+    guard resolved["TERM_PROGRAM"] == "cmux" || resolved["__CFBundleIdentifier"] == "com.cmuxterm.app" else {
+        return resolved
+    }
+
+    guard let executable = findBinary("cmux") ?? {
+        let bundledPath = "/Applications/cmux.app/Contents/Resources/bin/cmux"
+        return FileManager.default.isExecutableFile(atPath: bundledPath) ? bundledPath : nil
+    }() else {
+        return resolved
+    }
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: executable)
+    process.arguments = ["identify", "--json"]
+
+    var processEnvironment = ProcessInfo.processInfo.environment
+    if let socketPath = resolved["CMUX_SOCKET_PATH"], !socketPath.isEmpty {
+        processEnvironment["CMUX_SOCKET_PATH"] = socketPath
+    }
+    process.environment = processEnvironment
+
+    let outputPipe = Pipe()
+    process.standardOutput = outputPipe
+    process.standardError = Pipe()
+
+    do {
+        try process.run()
+        process.waitUntilExit()
+    } catch {
+        return resolved
+    }
+
+    guard process.terminationStatus == 0 else { return resolved }
+    let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+    guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        return resolved
+    }
+
+    // Prefer caller (the pane running the hook) over focused (global focus)
+    let source = (object["caller"] as? [String: Any]) ?? (object["focused"] as? [String: Any])
+    if let source {
+        if let workspaceRef = source["workspace_ref"] {
+            resolved["CMUX_WORKSPACE_REF"] = String(describing: workspaceRef)
+        }
+        if let surfaceRef = source["surface_ref"] {
+            resolved["CMUX_SURFACE_REF"] = String(describing: surfaceRef)
+        }
+        if let paneRef = source["pane_ref"] {
+            resolved["CMUX_PANE_REF"] = String(describing: paneRef)
+        }
+        if let workspaceId = source["workspace_id"] {
+            resolved["CMUX_WORKSPACE_ID"] = String(describing: workspaceId)
+        }
+        if let surfaceId = source["surface_id"] {
+            resolved["CMUX_SURFACE_ID"] = String(describing: surfaceId)
+        }
+    }
+
+    if let socketPath = object["socket_path"] as? String, !socketPath.isEmpty {
+        resolved["CMUX_SOCKET_PATH"] = socketPath
+    }
+
+    return resolved
+}
+
 func debugLog(_ message: String) {
     guard ProcessInfo.processInfo.environment["CODEISLAND_DEBUG"] != nil else { return }
     let ts = ISO8601DateFormatter().string(from: Date())
@@ -281,6 +358,26 @@ if let tmux = env["TMUX"], !tmux.isEmpty {
             json["_tmux_client_tty"] = clientTTY
         }
     }
+}
+
+let resolvedCmuxEnv = resolveCmuxEnvironment(env)
+if let workspaceRef = resolvedCmuxEnv["CMUX_WORKSPACE_REF"], !workspaceRef.isEmpty {
+    json["_cmux_workspace_ref"] = workspaceRef
+}
+if let surfaceRef = resolvedCmuxEnv["CMUX_SURFACE_REF"], !surfaceRef.isEmpty {
+    json["_cmux_surface_ref"] = surfaceRef
+}
+if let paneRef = resolvedCmuxEnv["CMUX_PANE_REF"], !paneRef.isEmpty {
+    json["_cmux_pane_ref"] = paneRef
+}
+if let workspaceId = resolvedCmuxEnv["CMUX_WORKSPACE_ID"], !workspaceId.isEmpty {
+    json["_cmux_workspace_id"] = workspaceId
+}
+if let surfaceId = resolvedCmuxEnv["CMUX_SURFACE_ID"], !surfaceId.isEmpty {
+    json["_cmux_surface_id"] = surfaceId
+}
+if let socketPath = resolvedCmuxEnv["CMUX_SOCKET_PATH"], !socketPath.isEmpty {
+    json["_cmux_socket_path"] = socketPath
 }
 
 // TTY path

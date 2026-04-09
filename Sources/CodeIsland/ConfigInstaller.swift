@@ -6,7 +6,10 @@ private enum HookId {
     static let current = "codeisland"
     static let legacy = "vibenotch"
     static func isOurs(_ s: String) -> Bool {
-        s.contains(current) || s.contains(legacy)
+        let lowered = s.lowercased()
+        return lowered.contains(current)
+            || lowered.contains(legacy)
+            || lowered.contains("--bridge-codex-hook")
     }
 }
 
@@ -195,7 +198,7 @@ struct ConfigInstaller {
     }
 
     /// Hook script version — bump this when the script template changes
-    private static let hookScriptVersion = 3
+    private static let hookScriptVersion = 4
 
     /// Hook script for Claude Code (dispatcher: bridge binary → nc fallback)
     private static let hookScript = """
@@ -577,9 +580,6 @@ struct ConfigInstaller {
         }
 
         var hooks = root[cli.configKey] as? [String: Any] ?? [:]
-        // Quote the path in case home directory contains spaces or special characters
-        let quotedBridge = bridgeCommand.contains(" ") ? "\"\(bridgeCommand)\"" : bridgeCommand
-        let baseCommand = "\(quotedBridge) --source \(cli.source)"
 
         for (event, timeout, _) in cli.events {
             var eventEntries = hooks[event] as? [[String: Any]] ?? []
@@ -589,14 +589,17 @@ struct ConfigInstaller {
             let entry: [String: Any]
             switch cli.format {
             case .claude:
-                entry = ["matcher": "*", "hooks": [["type": "command", "command": baseCommand] as [String: Any]]]
+                let command = externalHookCommand(for: cli, event: event)
+                entry = ["matcher": "*", "hooks": [["type": "command", "command": command] as [String: Any]]]
             case .nested:
-                entry = ["hooks": [["type": "command", "command": baseCommand, "timeout": timeout] as [String: Any]]]
+                let command = externalHookCommand(for: cli, event: event)
+                entry = ["hooks": [["type": "command", "command": command, "timeout": timeout] as [String: Any]]]
             case .flat:
-                entry = ["command": baseCommand]
+                let command = externalHookCommand(for: cli, event: event)
+                entry = ["command": command]
             case .copilot:
                 // Copilot CLI stdin lacks session_id/hook_event_name — pass event name via flag
-                let copilotCommand = "\(baseCommand) --event \(event)"
+                let copilotCommand = "\(externalBridgeBaseCommand(for: cli)) --event \(event)"
                 entry = ["type": "command", "bash": copilotCommand, "timeoutSec": timeout]
             }
             eventEntries.append(entry)
@@ -775,6 +778,29 @@ struct ConfigInstaller {
     /// Copied binaries inherit quarantine from the source app bundle.
     private static func stripQuarantine(_ path: String) {
         removexattr(path, "com.apple.quarantine", 0)
+    }
+
+    private static func externalHookCommand(for cli: CLIConfig, event: String) -> String {
+        if cli.source == "codex", let executablePath = currentExecutablePath() {
+            return "\(shellQuote(executablePath)) --bridge-codex-hook --source codex --event \(event)"
+        }
+        return externalBridgeBaseCommand(for: cli)
+    }
+
+    private static func externalBridgeBaseCommand(for cli: CLIConfig) -> String {
+        let quotedBridge = bridgeCommand.contains(" ") ? "\"\(bridgeCommand)\"" : bridgeCommand
+        return "\(quotedBridge) --source \(cli.source)"
+    }
+
+    private static func currentExecutablePath() -> String? {
+        if let executableURL = AutomationCLI.executableURL() {
+            return executableURL.path
+        }
+        return nil
+    }
+
+    private static func shellQuote(_ value: String) -> String {
+        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 
     // MARK: - OpenCode Plugin

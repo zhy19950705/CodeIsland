@@ -1,55 +1,74 @@
 import AppKit
 
-/// Plays 8-bit sound effects in response to hook events
 @MainActor
 class SoundManager {
     static let shared = SoundManager()
 
     private let defaults = UserDefaults.standard
-
-    /// Map event names to 8-bit WAV file names (without extension)
-    static let eventSounds: [(event: String, sound: String, key: String, label: String)] = [
-        ("SessionStart",      "8bit_start",    SettingsKey.soundSessionStart,   "会话开始"),
-        ("Stop",              "8bit_complete",  SettingsKey.soundTaskComplete,   "任务完成"),
-        ("PostToolUseFailure","8bit_error",     SettingsKey.soundTaskError,      "任务错误"),
-        ("PermissionRequest", "8bit_approval",  SettingsKey.soundApprovalNeeded, "需要审批"),
-        ("UserPromptSubmit",  "8bit_submit",    SettingsKey.soundPromptSubmit,   "任务确认"),
-    ]
-
     private var soundCache: [String: NSSound] = [:]
 
+    static let eventSounds: [(event: String, cue: SoundCue, key: String, label: String)] = [
+        ("SessionStart", .sessionStart, SettingsKey.soundSessionStart, "会话开始"),
+        ("Stop", .taskComplete, SettingsKey.soundTaskComplete, "任务完成"),
+        ("PostToolUseFailure", .taskError, SettingsKey.soundTaskError, "任务错误"),
+        ("PermissionRequest", .inputRequired, SettingsKey.soundApprovalNeeded, "需要审批"),
+        ("UserPromptSubmit", .taskAcknowledge, SettingsKey.soundPromptSubmit, "任务确认"),
+    ]
+
     private init() {
-        // Pre-load all sounds into cache
-        for entry in Self.eventSounds {
-            if let sound = loadSound(entry.sound) {
-                soundCache[entry.sound] = sound
-            }
-        }
+        preloadDefaultSounds()
     }
 
-    /// Called from AppState.handleEvent() to trigger appropriate sounds
     func handleEvent(_ eventName: String) {
         guard defaults.bool(forKey: SettingsKey.soundEnabled) else { return }
         guard let entry = Self.eventSounds.first(where: { $0.event == eventName }) else { return }
         guard defaults.bool(forKey: entry.key) else { return }
-        play(entry.sound)
+        play(cue: entry.cue)
     }
 
-    /// Play boot sound on app launch
     func playBoot() {
         guard defaults.bool(forKey: SettingsKey.soundEnabled) else { return }
         guard defaults.bool(forKey: SettingsKey.soundBoot) else { return }
-        play("8bit_boot")
+        playDefault(named: "8bit_boot")
     }
 
-    /// Preview a specific sound (used by settings UI play buttons)
-    func preview(_ soundName: String) {
-        play(soundName)
+    func preview(cue: SoundCue) {
+        play(cue: cue, prefersPreview: true)
     }
 
-    /// Play a named 8-bit WAV with volume control
-    private func play(_ name: String) {
-        guard let sound = soundCache[name] ?? loadSound(name) else {
+    func previewBoot() {
+        playDefault(named: "8bit_boot")
+    }
+
+    private func preloadDefaultSounds() {
+        for name in ["8bit_start", "8bit_submit", "8bit_approval", "8bit_complete", "8bit_error", "8bit_boot"] {
+            if let sound = loadDefaultSound(name) {
+                soundCache[name] = sound
+            }
+        }
+    }
+
+    private func play(cue: SoundCue, prefersPreview: Bool = false) {
+        let selectedPack = SoundPackCatalog.selectedPack()
+        if let url = selectedPack.url(for: cue, prefersPreview: prefersPreview) {
+            play(url: url)
+            return
+        }
+        playDefault(named: fallbackSoundName(for: cue))
+    }
+
+    private func fallbackSoundName(for cue: SoundCue) -> String {
+        switch cue {
+        case .sessionStart: return "8bit_start"
+        case .taskAcknowledge: return "8bit_submit"
+        case .inputRequired: return "8bit_approval"
+        case .taskComplete: return "8bit_complete"
+        case .taskError: return "8bit_error"
+        }
+    }
+
+    private func playDefault(named name: String) {
+        guard let sound = soundCache[name] ?? loadDefaultSound(name) else {
             NSSound.beep()
             return
         }
@@ -59,14 +78,20 @@ class SoundManager {
         sound.play()
     }
 
-    /// Load a WAV from the SPM resource bundle
-    private func loadSound(_ name: String) -> NSSound? {
-        // SPM generates Bundle.module for resource bundles
-        // Resources are inside CodeIsland_CodeIsland.bundle/Resources/
+    private func play(url: URL) {
+        guard let sound = NSSound(contentsOf: url, byReference: false) else {
+            NSSound.beep()
+            return
+        }
+        let volume = defaults.integer(forKey: SettingsKey.soundVolume)
+        sound.volume = Float(volume) / 100.0
+        sound.play()
+    }
+
+    private func loadDefaultSound(_ name: String) -> NSSound? {
         if let url = Bundle.module.url(forResource: name, withExtension: "wav", subdirectory: "Resources") {
             return NSSound(contentsOf: url, byReference: false)
         }
-        // Fallback: try without subdirectory
         if let url = Bundle.module.url(forResource: name, withExtension: "wav") {
             return NSSound(contentsOf: url, byReference: false)
         }

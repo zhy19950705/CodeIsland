@@ -43,6 +43,7 @@ enum SettingsKey {
     static let soundApprovalNeeded = "soundApprovalNeeded"
     static let soundPromptSubmit = "soundPromptSubmit"
     static let soundBoot = "soundBoot"
+    static let soundPackID = "soundPackID"
 
     // Shortcuts (per-action: shortcut_{action}_enabled, shortcut_{action}_keyCode, shortcut_{action}_modifiers)
     static func shortcutEnabled(_ action: String) -> String { "shortcut_\(action)_enabled" }
@@ -87,12 +88,13 @@ struct SettingsDefaults {
     static let soundApprovalNeeded = true
     static let soundPromptSubmit = false
     static let soundBoot = true
+    static let soundPackID = SoundPackCatalog.defaultPackID
 
     static let maxToolHistory = 20
 
     static let mascotSpeed = 100  // percentage: 0–300, 0 = silent
 
-    static let sessionGroupingMode = "all"
+    static let sessionGroupingMode = "project"
 
     static let showToolStatus = true
 }
@@ -126,6 +128,7 @@ class SettingsManager {
             SettingsKey.soundApprovalNeeded: SettingsDefaults.soundApprovalNeeded,
             SettingsKey.soundPromptSubmit: SettingsDefaults.soundPromptSubmit,
             SettingsKey.soundBoot: SettingsDefaults.soundBoot,
+            SettingsKey.soundPackID: SettingsDefaults.soundPackID,
             SettingsKey.maxToolHistory: SettingsDefaults.maxToolHistory,
             SettingsKey.mascotSpeed: SettingsDefaults.mascotSpeed,
             SettingsKey.sessionGroupingMode: SettingsDefaults.sessionGroupingMode,

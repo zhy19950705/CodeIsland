@@ -40,6 +40,12 @@ public struct SessionSnapshot {
     public var kittyWindowId: String?   // Kitty window ID for precise focus
     public var tmuxPane: String?        // tmux pane identifier (%0, %1, etc.)
     public var tmuxClientTty: String?   // tmux client TTY for real terminal detection
+    public var cmuxWorkspaceRef: String?
+    public var cmuxSurfaceRef: String?
+    public var cmuxPaneRef: String?
+    public var cmuxWorkspaceId: String?
+    public var cmuxSurfaceId: String?
+    public var cmuxSocketPath: String?
     public var termBundleId: String?    // __CFBundleIdentifier for precise terminal ID
     public var cliPid: pid_t?            // CLI process PID (from bridge _ppid)
     public var source: String = "claude" // "claude" or "codex"
@@ -47,6 +53,7 @@ public struct SessionSnapshot {
     public var sessionTitle: String?
     public var sessionTitleSource: SessionTitleSource?
     public var providerSessionId: String?
+    public var isHistoricalSnapshot: Bool = false
     /// nil = unchecked, false = not YOLO, true = YOLO
     public var isYoloMode: Bool?
 
@@ -591,6 +598,24 @@ public func extractMetadata(into sessions: inout [String: SessionSnapshot], sess
     if let tmuxTty = event.rawJSON["_tmux_client_tty"] as? String, !tmuxTty.isEmpty {
         sessions[sessionId]?.tmuxClientTty = tmuxTty
     }
+    if let workspaceRef = event.rawJSON["_cmux_workspace_ref"] as? String, !workspaceRef.isEmpty {
+        sessions[sessionId]?.cmuxWorkspaceRef = workspaceRef
+    }
+    if let surfaceRef = event.rawJSON["_cmux_surface_ref"] as? String, !surfaceRef.isEmpty {
+        sessions[sessionId]?.cmuxSurfaceRef = surfaceRef
+    }
+    if let paneRef = event.rawJSON["_cmux_pane_ref"] as? String, !paneRef.isEmpty {
+        sessions[sessionId]?.cmuxPaneRef = paneRef
+    }
+    if let workspaceId = event.rawJSON["_cmux_workspace_id"] as? String, !workspaceId.isEmpty {
+        sessions[sessionId]?.cmuxWorkspaceId = workspaceId
+    }
+    if let surfaceId = event.rawJSON["_cmux_surface_id"] as? String, !surfaceId.isEmpty {
+        sessions[sessionId]?.cmuxSurfaceId = surfaceId
+    }
+    if let socketPath = event.rawJSON["_cmux_socket_path"] as? String, !socketPath.isEmpty {
+        sessions[sessionId]?.cmuxSocketPath = socketPath
+    }
     if let bundle = event.rawJSON["_term_bundle"] as? String, !bundle.isEmpty {
         sessions[sessionId]?.termBundleId = bundle
     }
@@ -620,6 +645,30 @@ public func extractMetadata(into sessions: inout [String: SessionSnapshot], sess
         if sessions[sessionId]?.tmuxPane == nil,
            let pane = env["TMUX_PANE"], !pane.isEmpty {
             sessions[sessionId]?.tmuxPane = pane
+        }
+        if sessions[sessionId]?.cmuxWorkspaceRef == nil,
+           let workspaceRef = env["CMUX_WORKSPACE_REF"], !workspaceRef.isEmpty {
+            sessions[sessionId]?.cmuxWorkspaceRef = workspaceRef
+        }
+        if sessions[sessionId]?.cmuxSurfaceRef == nil,
+           let surfaceRef = env["CMUX_SURFACE_REF"], !surfaceRef.isEmpty {
+            sessions[sessionId]?.cmuxSurfaceRef = surfaceRef
+        }
+        if sessions[sessionId]?.cmuxPaneRef == nil,
+           let paneRef = env["CMUX_PANE_REF"], !paneRef.isEmpty {
+            sessions[sessionId]?.cmuxPaneRef = paneRef
+        }
+        if sessions[sessionId]?.cmuxWorkspaceId == nil,
+           let workspaceId = env["CMUX_WORKSPACE_ID"], !workspaceId.isEmpty {
+            sessions[sessionId]?.cmuxWorkspaceId = workspaceId
+        }
+        if sessions[sessionId]?.cmuxSurfaceId == nil,
+           let surfaceId = env["CMUX_SURFACE_ID"], !surfaceId.isEmpty {
+            sessions[sessionId]?.cmuxSurfaceId = surfaceId
+        }
+        if sessions[sessionId]?.cmuxSocketPath == nil,
+           let socketPath = env["CMUX_SOCKET_PATH"], !socketPath.isEmpty {
+            sessions[sessionId]?.cmuxSocketPath = socketPath
         }
     }
     if let ppid = event.rawJSON["_ppid"] as? Int, ppid > 0 {

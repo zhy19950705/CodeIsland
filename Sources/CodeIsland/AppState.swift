@@ -8,6 +8,9 @@ private let log = Logger(subsystem: "com.codeisland", category: "AppState")
 @MainActor
 @Observable
 final class AppState {
+    private static let testingSessionPrefix = "preview-"
+    private static let historicalSessionsClearedAtKey = "historicalSessionsClearedAt"
+
     var sessions: [String: SessionSnapshot] = [:]
     var activeSessionId: String?
     var permissionQueue: [PermissionRequest] = []
@@ -19,7 +22,14 @@ final class AppState {
     var pendingQuestion: QuestionRequest? { questionQueue.first }
     /// Preview-only: mock question payload for DebugHarness (no continuation needed)
     var previewQuestionPayload: QuestionPayload?
-    var surface: IslandSurface = .collapsed
+    /// Preview-only: mock approval payload for settings-driven testing.
+    var previewApprovalPayload: ApprovalPreviewPayload?
+    var surface: IslandSurface = .collapsed {
+        didSet {
+            guard oldValue != surface else { return }
+            notifyPanelStateChanged()
+        }
+    }
 
     var justCompletedSessionId: String? {
         if case .completionCard(let id) = surface { return id }
@@ -36,6 +46,8 @@ final class AppState {
     private var saveTimer: Timer?
     private var fsEventStream: FSEventStreamRef?
     private var lastFSScanTime: Date = .distantPast
+    private let sessionTerminalIndexStore = SessionTerminalIndexStore()
+    private var usageSnapshotObserver: NSObjectProtocol?
     private var isShowingCompletion: Bool {
         if case .completionCard = surface { return true }
         return false
@@ -48,6 +60,23 @@ final class AppState {
         return sessions[rid]
     }
     private var rotationTimer: Timer?
+    var usageSnapshot: UsageSnapshot = UsageSnapshotStore.load()
+
+    init() {
+        usageSnapshotObserver = NotificationCenter.default.addObserver(
+            forName: UsageSnapshotStore.didUpdateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshUsageSnapshot()
+            }
+        }
+    }
+
+    func refreshUsageSnapshot() {
+        usageSnapshot = UsageSnapshotStore.load()
+    }
 
     private func startCleanupTimer() {
         cleanupTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
@@ -94,6 +123,7 @@ final class AppState {
         let userTimeout = SettingsManager.shared.sessionTimeout
         let defaultStaleMinutes = 10  // for sessions without process monitor
         for (key, session) in sessions where session.status == .idle {
+            if session.isHistoricalSnapshot { continue }
             let idleMinutes = Int(-session.lastActivity.timeIntervalSinceNow / 60)
             let hasMonitor = processMonitors[key] != nil
             if userTimeout > 0 && idleMinutes >= userTimeout {
@@ -359,15 +389,39 @@ final class AppState {
         return s.model
     }
 
+    var preferredSessionId: String? {
+        mostActiveSessionId() ?? sessions.keys.sorted().first
+    }
+
     /// Recompute cached status/source/counts from sessions in a single O(n) pass.
     /// Call after any mutation to `sessions` or session status.
     private func refreshDerivedState() {
         let summary = deriveSessionSummary(from: sessions)
+        var didChange = false
         // Only assign when changed (avoids unnecessary @Observable notifications)
-        if status != summary.status { status = summary.status }
-        if primarySource != summary.primarySource { primarySource = summary.primarySource }
-        if activeSessionCount != summary.activeSessionCount { activeSessionCount = summary.activeSessionCount }
-        if totalSessionCount != summary.totalSessionCount { totalSessionCount = summary.totalSessionCount }
+        if status != summary.status {
+            status = summary.status
+            didChange = true
+        }
+        if primarySource != summary.primarySource {
+            primarySource = summary.primarySource
+            didChange = true
+        }
+        if activeSessionCount != summary.activeSessionCount {
+            activeSessionCount = summary.activeSessionCount
+            didChange = true
+        }
+        if totalSessionCount != summary.totalSessionCount {
+            totalSessionCount = summary.totalSessionCount
+            didChange = true
+        }
+        if didChange {
+            notifyPanelStateChanged()
+        }
+    }
+
+    private func notifyPanelStateChanged() {
+        NotificationCenter.default.post(name: .codeIslandPanelStateDidChange, object: self)
     }
 
     private func refreshProviderTitle(for trackedSessionId: String, providerSessionId: String? = nil) {
@@ -389,6 +443,74 @@ final class AppState {
             sessions[trackedSessionId]?.sessionTitle = nil
             sessions[trackedSessionId]?.sessionTitleSource = nil
         }
+    }
+
+    func loadTestingScenario(_ scenario: PreviewScenario) {
+        clearTestingScenarios()
+        DebugHarness.apply(scenario, to: self)
+
+        if scenario == .approval {
+            previewApprovalPayload = ApprovalPreviewPayload(
+                tool: "Bash",
+                toolInput: ["command": "npm run test -- --coverage"]
+            )
+        }
+
+        if surface == .collapsed && !sessions.isEmpty {
+            withAnimation(NotchAnimation.open) {
+                surface = .sessionList
+            }
+        }
+
+        refreshDerivedState()
+    }
+
+    func clearTestingScenarios() {
+        let previewSessionIDs = sessions.keys.filter { $0.hasPrefix(Self.testingSessionPrefix) }
+        for sessionId in previewSessionIDs {
+            sessions.removeValue(forKey: sessionId)
+            stopMonitor(sessionId)
+        }
+
+        previewQuestionPayload = nil
+        previewApprovalPayload = nil
+        completionQueue.removeAll { $0.hasPrefix(Self.testingSessionPrefix) }
+
+        if let activeSessionId, activeSessionId.hasPrefix(Self.testingSessionPrefix) {
+            self.activeSessionId = mostActiveSessionId()
+        }
+
+        if let sessionId = surface.sessionId, sessionId.hasPrefix(Self.testingSessionPrefix) {
+            withAnimation(NotchAnimation.close) {
+                surface = sessions.isEmpty ? .collapsed : .sessionList
+            }
+        }
+
+        startRotationIfNeeded()
+        refreshDerivedState()
+    }
+
+    func clearAllSessionRecords() {
+        cancelCompletionQueue()
+
+        for key in Array(processMonitors.keys) {
+            stopMonitor(key)
+        }
+
+        permissionQueue.removeAll()
+        questionQueue.removeAll()
+        previewQuestionPayload = nil
+        previewApprovalPayload = nil
+        sessions.removeAll()
+        activeSessionId = nil
+        rotatingSessionId = nil
+        surface = .collapsed
+
+        SessionPersistence.clear()
+        sessionTerminalIndexStore.clear()
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.historicalSessionsClearedAtKey)
+
+        refreshDerivedState()
     }
 
     func handleEvent(_ event: HookEvent) {
@@ -458,6 +580,10 @@ final class AppState {
             refreshProviderTitle(for: sessionId)
         }
 
+        if let session = sessions[sessionId] {
+            sessionTerminalIndexStore.persist(sessionId: sessionId, session: session)
+        }
+
         // Handle the "else if activeSessionId == sessionId → mostActive" edge case
         // (reducer can't check activeSessionId since it's AppState-local)
         if sessions[sessionId]?.status == .idle && activeSessionId == sessionId {
@@ -510,6 +636,10 @@ final class AppState {
 
         let request = PermissionRequest(event: event, continuation: continuation)
         permissionQueue.append(request)
+
+        if let session = sessions[sessionId] {
+            sessionTerminalIndexStore.persist(sessionId: sessionId, session: session)
+        }
 
         // Show UI only if this is the first (or only) queued item
         if permissionQueue.count == 1 {
@@ -591,6 +721,10 @@ final class AppState {
         let request = QuestionRequest(event: event, question: question, continuation: continuation)
         questionQueue.append(request)
 
+        if let session = sessions[sessionId] {
+            sessionTerminalIndexStore.persist(sessionId: sessionId, session: session)
+        }
+
         if questionQueue.count == 1 {
             activeSessionId = sessionId
             withAnimation(NotchAnimation.open) {
@@ -640,6 +774,10 @@ final class AppState {
 
         let request = QuestionRequest(event: event, question: payload, continuation: continuation, isFromPermission: true)
         questionQueue.append(request)
+
+        if let session = sessions[sessionId] {
+            sessionTerminalIndexStore.persist(sessionId: sessionId, session: session)
+        }
 
         if questionQueue.count == 1 {
             activeSessionId = sessionId
@@ -855,12 +993,19 @@ final class AppState {
             snapshot.kittyWindowId = p.kittyWindowId
             snapshot.tmuxPane = p.tmuxPane
             snapshot.tmuxClientTty = p.tmuxClientTty
+            snapshot.cmuxWorkspaceRef = p.cmuxWorkspaceRef
+            snapshot.cmuxSurfaceRef = p.cmuxSurfaceRef
+            snapshot.cmuxPaneRef = p.cmuxPaneRef
+            snapshot.cmuxWorkspaceId = p.cmuxWorkspaceId
+            snapshot.cmuxSurfaceId = p.cmuxSurfaceId
+            snapshot.cmuxSocketPath = p.cmuxSocketPath
             snapshot.termBundleId = p.termBundleId
             snapshot.lastActivity = p.lastActivity
             // Restore persisted cliPid — enables immediate process monitoring for all CLIs
             if let pid = p.cliPid, pid > 0 {
                 snapshot.cliPid = pid
             }
+            snapshot = sessionTerminalIndexStore.hydrate(snapshot, sessionId: p.sessionId)
             sessions[p.sessionId] = snapshot
             refreshProviderTitle(for: p.sessionId)
             // Attach process monitor for exit detection, but keep status idle —
@@ -883,11 +1028,29 @@ final class AppState {
             }
         }
         SessionPersistence.clear()
+
+        if ConfigInstaller.isEnabled(source: "codex") {
+            restoreHistoricalCodexSessions()
+        }
+
         if activeSessionId == nil {
             activeSessionId = sessions.first(where: { $0.value.status != .idle })?.key
                 ?? sessions.keys.sorted().first
         }
         refreshDerivedState()
+    }
+
+    private func restoreHistoricalCodexSessions() {
+        let clearedAt = UserDefaults.standard.double(forKey: Self.historicalSessionsClearedAtKey)
+        for historical in CodexSessionHistoryLoader.loadRecentSessions() {
+            if clearedAt > 0, historical.snapshot.lastActivity.timeIntervalSince1970 <= clearedAt {
+                continue
+            }
+            guard sessions[historical.sessionId] == nil else { continue }
+            let snapshot = sessionTerminalIndexStore.hydrate(historical.snapshot, sessionId: historical.sessionId)
+            sessions[historical.sessionId] = snapshot
+            refreshProviderTitle(for: historical.sessionId, providerSessionId: historical.sessionId)
+        }
     }
 
     func startSessionDiscovery() {
@@ -1008,11 +1171,13 @@ final class AppState {
             if let last = info.recentMessages.last(where: { !$0.isUser }) {
                 session.lastAssistantMessage = last.text
             }
+            session = sessionTerminalIndexStore.hydrate(session, sessionId: info.sessionId)
             sessions[info.sessionId] = session
             refreshProviderTitle(for: info.sessionId, providerSessionId: info.sessionId)
             if let pid = info.pid {
                 monitorProcess(sessionId: info.sessionId, pid: pid)
             }
+            sessionTerminalIndexStore.persist(sessionId: info.sessionId, session: session)
             didAdd = true
         }
         if didAdd && activeSessionId == nil {
@@ -1036,6 +1201,9 @@ final class AppState {
             rotationTimer?.invalidate()
             cleanupTimer?.invalidate()
             saveTimer?.invalidate()
+            if let usageSnapshotObserver {
+                NotificationCenter.default.removeObserver(usageSnapshotObserver)
+            }
             if let stream = fsEventStream {
                 FSEventStreamStop(stream)
                 FSEventStreamInvalidate(stream)

@@ -1,6 +1,11 @@
 import Foundation
 import CodeIslandCore
 
+struct ApprovalPreviewPayload {
+    let tool: String
+    let toolInput: [String: Any]?
+}
+
 struct PermissionRequest {
     let event: HookEvent
     let continuation: CheckedContinuation<Data, Never>

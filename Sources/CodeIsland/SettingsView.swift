@@ -10,6 +10,7 @@ enum SettingsPage: String, Identifiable, Hashable {
     case mascots
     case sound
     case shortcuts
+    case testing
     case hooks
     case about
 
@@ -23,6 +24,7 @@ enum SettingsPage: String, Identifiable, Hashable {
         case .mascots: return "person.2.fill"
         case .sound: return "speaker.wave.2.fill"
         case .shortcuts: return "command.circle.fill"
+        case .testing: return "testtube.2"
         case .hooks: return "link.circle.fill"
         case .about: return "info.circle.fill"
         }
@@ -36,6 +38,7 @@ enum SettingsPage: String, Identifiable, Hashable {
         case .mascots: return .pink
         case .sound: return .green
         case .shortcuts: return .indigo
+        case .testing: return .orange
         case .hooks: return .purple
         case .about: return .cyan
         }
@@ -49,34 +52,52 @@ private struct SidebarGroup: Hashable {
 
 private let sidebarGroups: [SidebarGroup] = [
     SidebarGroup(title: nil, pages: [.general, .behavior, .appearance, .mascots, .sound, .shortcuts]),
-    SidebarGroup(title: "CodeIsland", pages: [.hooks, .about]),
+    SidebarGroup(title: "CodeIsland", pages: [.testing, .hooks, .about]),
 ]
 
 // MARK: - Main View
 
 struct SettingsView: View {
     @ObservedObject private var l10n = L10n.shared
+    let appState: AppState?
     @State private var selectedPage: SettingsPage = .general
 
+    init(appState: AppState? = nil) {
+        self.appState = appState
+    }
+
     var body: some View {
-        NavigationSplitView {
-            List(selection: $selectedPage) {
-                ForEach(sidebarGroups, id: \.title) { group in
-                    Section {
-                        ForEach(group.pages) { page in
-                            SidebarRow(page: page)
-                                .tag(page)
-                        }
-                    } header: {
-                        if let title = group.title {
-                            Text(title)
+        HStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    ForEach(sidebarGroups, id: \.title) { group in
+                        VStack(alignment: .leading, spacing: 6) {
+                            if let title = group.title {
+                                Text(title)
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 8)
+                                    .padding(.bottom, 2)
+                            }
+
+                            ForEach(group.pages) { page in
+                                Button {
+                                    selectedPage = page
+                                } label: {
+                                    SidebarRow(page: page, isSelected: selectedPage == page)
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
                     }
                 }
             }
-            .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(200)
-        } detail: {
+            .frame(minWidth: 208, idealWidth: 208, maxWidth: 208, maxHeight: .infinity, alignment: .topLeading)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 14)
+
+            Divider()
+
             Group {
                 switch selectedPage {
                 case .general: GeneralPage()
@@ -85,13 +106,43 @@ struct SettingsView: View {
                 case .mascots: MascotsPage()
                 case .sound: SoundPage()
                 case .shortcuts: ShortcutsPage()
+                case .testing: TestingPage(appState: appState)
                 case .hooks: HooksPage()
                 case .about: AboutPage()
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .toolbar(removing: .sidebarToggle)
+        .frame(minWidth: 560, maxWidth: .infinity, minHeight: 420, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
+}
+
+private enum SettingsTestingScenario: String, CaseIterable, Identifiable {
+    case working
+    case approval
+    case question
+    case completion
+    case multi
+    case busy
+    case allcli
+
+    var id: String { rawValue }
+
+    var previewScenario: PreviewScenario {
+        switch self {
+        case .working: return .working
+        case .approval: return .approval
+        case .question: return .question
+        case .completion: return .completion
+        case .multi: return .multi
+        case .busy: return .busy
+        case .allcli: return .allcli
+        }
+    }
+
+    var titleKey: String { "testing_scenario_\(rawValue)" }
+    var detailKey: String { "testing_scenario_\(rawValue)_desc" }
 }
 
 private struct PageHeader: View {
@@ -104,6 +155,7 @@ private struct PageHeader: View {
 private struct SidebarRow: View {
     @ObservedObject private var l10n = L10n.shared
     let page: SettingsPage
+    let isSelected: Bool
 
     var body: some View {
         Label {
@@ -120,6 +172,14 @@ private struct SidebarRow: View {
                     .foregroundStyle(.white)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isSelected ? Color.accentColor.opacity(0.16) : .clear)
+        )
+        .contentShape(Rectangle())
     }
 }
 
@@ -130,6 +190,12 @@ private struct GeneralPage: View {
     @AppStorage(SettingsKey.displayChoice) private var displayChoice = SettingsDefaults.displayChoice
     @AppStorage(SettingsKey.allowHorizontalDrag) private var allowHorizontalDrag = SettingsDefaults.allowHorizontalDrag
     @State private var launchAtLogin: Bool
+    @State private var usageSnapshot: UsageSnapshot = UsageSnapshotStore.load()
+    @State private var usageMonitorSnapshot = UsageMonitorLaunchAgentManager().snapshot()
+    @State private var usageStatusMessage = ""
+    @State private var usageStatusIsError = false
+
+    private let usageMonitorManager = UsageMonitorLaunchAgentManager()
 
     init() {
         _launchAtLogin = State(initialValue: SettingsManager.shared.launchAtLogin)
@@ -161,19 +227,88 @@ private struct GeneralPage: View {
                     ForEach(Array(NSScreen.screens.enumerated()), id: \.offset) { index, screen in
                         let name = screen.localizedName
                         let isBuiltin = name.contains("Built-in") || name.contains("内置")
-                        let hasNotch: Bool = {
-                            if #available(macOS 12.0, *) {
-                                return screen.auxiliaryTopLeftArea != nil
-                            }
-                            return false
-                        }()
                         let label = isBuiltin ? l10n["builtin_display"] : name
                         Text(label).tag("screen_\(index)")
                     }
                 }
             }
+
+            Section(l10n["usage_monitor_section"]) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(l10n["usage_monitor"])
+                    Text(usageMonitorSnapshot.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack(spacing: 8) {
+                    Button {
+                        do {
+                            try usageMonitorManager.setEnabled(usageMonitorSnapshot.state != .enabled)
+                            refreshUsage()
+                            usageStatusMessage = usageMonitorSnapshot.state == .enabled
+                                ? l10n["usage_monitor_disabled"]
+                                : l10n["usage_monitor_enabled"]
+                            usageStatusIsError = false
+                        } catch {
+                            usageStatusMessage = error.localizedDescription
+                            usageStatusIsError = true
+                            refreshUsage()
+                        }
+                    } label: {
+                        Text(usageMonitorSnapshot.state == .enabled ? l10n["disable_usage_monitor"] : l10n["enable_usage_monitor"])
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(usageMonitorSnapshot.state == .unavailable)
+
+                    Button {
+                        do {
+                            try usageMonitorManager.runNow()
+                            refreshUsage()
+                            usageStatusMessage = l10n["usage_refresh_complete"]
+                            usageStatusIsError = false
+                        } catch {
+                            usageStatusMessage = error.localizedDescription
+                            usageStatusIsError = true
+                        }
+                    } label: {
+                        Text(l10n["refresh_now"])
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(usageMonitorSnapshot.state == .unavailable)
+                }
+
+                if !usageStatusMessage.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: usageStatusIsError ? "xmark.circle.fill" : "checkmark.circle.fill")
+                            .foregroundStyle(usageStatusIsError ? .red : .green)
+                        Text(usageStatusMessage)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if usageSnapshot.providers.isEmpty {
+                    Text(l10n["usage_snapshot_empty"])
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(usageSnapshot.providers) { provider in
+                        UsageProviderRow(provider: provider)
+                    }
+                }
+            }
         }
         .formStyle(.grouped)
+        .onAppear { refreshUsage() }
+        .onReceive(NotificationCenter.default.publisher(for: UsageSnapshotStore.didUpdateNotification)) { _ in
+            refreshUsage()
+        }
+    }
+
+    private func refreshUsage() {
+        usageSnapshot = UsageSnapshotStore.load()
+        usageMonitorSnapshot = usageMonitorManager.snapshot()
     }
 }
 
@@ -243,54 +378,146 @@ private struct BehaviorPage: View {
     }
 }
 
+// MARK: - Testing Page
+
+private struct TestingPage: View {
+    @ObservedObject private var l10n = L10n.shared
+    let appState: AppState?
+
+    @State private var selectedScenario: SettingsTestingScenario = .multi
+    @State private var statusMessage = ""
+    @State private var statusIsError = false
+
+    var body: some View {
+        Form {
+            Section(l10n["testing_preview_section"]) {
+                Picker(l10n["testing_preview_scenario"], selection: $selectedScenario) {
+                    ForEach(SettingsTestingScenario.allCases) { scenario in
+                        Text(l10n[scenario.titleKey]).tag(scenario)
+                    }
+                }
+
+                Text(l10n[selectedScenario.detailKey])
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 8) {
+                    Button {
+                        appState?.loadTestingScenario(selectedScenario.previewScenario)
+                        statusMessage = l10n["testing_preview_loaded"]
+                        statusIsError = false
+                    } label: {
+                        Text(l10n["testing_load_preview"])
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(appState == nil)
+
+                    Button(role: .destructive) {
+                        appState?.clearTestingScenarios()
+                        statusMessage = l10n["testing_preview_cleared"]
+                        statusIsError = false
+                    } label: {
+                        Text(l10n["testing_clear_preview"])
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(appState == nil)
+                }
+
+                if appState == nil {
+                    Text(l10n["testing_unavailable"])
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section(l10n["testing_live_checks"]) {
+                Button {
+                    do {
+                        try SettingsNotificationTester.sendTestNotification()
+                        statusMessage = l10n["testing_notification_sent"]
+                        statusIsError = false
+                    } catch {
+                        statusMessage = error.localizedDescription
+                        statusIsError = true
+                    }
+                } label: {
+                    Text(l10n["testing_send_notification"])
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                Text(l10n["testing_send_notification_desc"])
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section(l10n["testing_data_section"]) {
+                Button(role: .destructive) {
+                    appState?.clearAllSessionRecords()
+                    statusMessage = l10n["testing_all_sessions_cleared"]
+                    statusIsError = false
+                } label: {
+                    Text(l10n["testing_clear_all_sessions"])
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(appState == nil)
+
+                Text(l10n["testing_clear_all_sessions_desc"])
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if !statusMessage.isEmpty {
+                Section {
+                    HStack(spacing: 6) {
+                        Image(systemName: statusIsError ? "xmark.circle.fill" : "checkmark.circle.fill")
+                            .foregroundStyle(statusIsError ? .red : .green)
+                        Text(statusMessage)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
 // MARK: - Hooks Page
 
 private struct HooksPage: View {
     @ObservedObject private var l10n = L10n.shared
-    @State private var cliStatuses: [String: Bool] = [:]
+    @State private var cliSnapshots: [CLIIntegrationSnapshot] = []
+    @State private var editorSnapshots: [EditorBridgeSnapshot] = []
     @State private var statusMessage = ""
     @State private var statusIsError = false
-    @State private var refreshKey = 0
+    @State private var refreshKey = UUID()
 
-    private func refreshCLIStatuses() {
-        for cli in ConfigInstaller.allCLIs {
-            cliStatuses[cli.source] = ConfigInstaller.isInstalled(source: cli.source)
-        }
-        cliStatuses["opencode"] = ConfigInstaller.isInstalled(source: "opencode")
-    }
-
-    private func statusText(installed: Bool, exists: Bool) -> String {
-        installed ? l10n["activated"] : (exists ? l10n["not_installed"] : l10n["not_detected"])
-    }
+    private let cliIntegrationManager = CLIIntegrationManager()
+    private let editorBridgeManager = EditorBridgeManager()
 
     var body: some View {
         Form {
-            Section(l10n["cli_status"]) {
-                ForEach(ConfigInstaller.allCLIs, id: \.source) { cli in
-                    let installed = cliStatuses[cli.source] ?? false
-                    let exists = ConfigInstaller.cliExists(source: cli.source)
-                    CLIStatusRow(
-                        name: cli.name,
-                        source: cli.source,
-                        configPath: "~/\(cli.configPath)",
-                        fullPath: cli.fullPath,
-                        installed: installed,
-                        exists: exists
-                    ) { _ in refreshCLIStatuses() }
-                    .id("\(cli.source)-\(refreshKey)")
+            Section(l10n["editor_bridges"]) {
+                ForEach(editorSnapshots) { snapshot in
+                    EditorBridgeRow(snapshot: snapshot) {
+                        editorBridgeManager.openInstallLocation(for: snapshot.host)
+                    }
                 }
-                // OpenCode (plugin-based, not hooks)
-                let ocInstalled = cliStatuses["opencode"] ?? false
-                let ocExists = ConfigInstaller.cliExists(source: "opencode")
-                CLIStatusRow(
-                    name: "OpenCode",
-                    source: "opencode",
-                    configPath: "~/.config/opencode/config.json",
-                    fullPath: NSHomeDirectory() + "/.config/opencode/config.json",
-                    installed: ocInstalled,
-                    exists: ocExists
-                ) { _ in refreshCLIStatuses() }
-                .id("opencode-\(refreshKey)")
+            }
+
+            Section(l10n["cli_integrations"]) {
+                ForEach(cliSnapshots) { snapshot in
+                    CLIIntegrationRow(snapshot: snapshot) {
+                        cliIntegrationManager.openConfig(for: snapshot.integration)
+                    } onToggle: { enabled in
+                        _ = ConfigInstaller.setEnabled(source: snapshot.integration.rawValue, enabled: enabled)
+                        refreshDiagnostics()
+                    }
+                    .id("\(snapshot.integration.rawValue)-\(refreshKey)")
+                }
             }
 
             Section(l10n["management"]) {
@@ -304,8 +531,7 @@ private struct HooksPage: View {
                             UserDefaults.standard.set(true, forKey: "cli_enabled_opencode")
                         }
                         if ConfigInstaller.install() {
-                            refreshCLIStatuses()
-                            refreshKey += 1
+                            refreshDiagnostics()
                             statusMessage = l10n["hooks_installed"]
                             statusIsError = false
                         } else {
@@ -325,8 +551,7 @@ private struct HooksPage: View {
                         }
                         UserDefaults.standard.set(false, forKey: "cli_enabled_opencode")
                         ConfigInstaller.uninstall()
-                        refreshCLIStatuses()
-                        refreshKey += 1
+                        refreshDiagnostics()
                         statusMessage = l10n["hooks_uninstalled"]
                         statusIsError = false
                     } label: {
@@ -348,75 +573,193 @@ private struct HooksPage: View {
             }
         }
         .formStyle(.grouped)
-        .onAppear { refreshCLIStatuses() }
+        .onAppear { refreshDiagnostics() }
+    }
+
+    private func refreshDiagnostics() {
+        cliSnapshots = cliIntegrationManager.snapshots()
+        editorSnapshots = editorBridgeManager.snapshots()
+        refreshKey = UUID()
     }
 }
 
-private struct CLIStatusRow: View {
+private struct EditorBridgeRow: View {
     @ObservedObject private var l10n = L10n.shared
-    let name: String
-    let source: String
-    let configPath: String
-    let fullPath: String
-    let installed: Bool
-    let exists: Bool
-    var onToggle: ((Bool) -> Void)?
+    let snapshot: EditorBridgeSnapshot
+    let onOpen: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Image(systemName: snapshot.host.systemName)
+                    .frame(width: 20)
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(snapshot.host.title)
+                    Text(l10n[snapshot.state.detailKey])
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                    if let installPath = snapshot.installPath {
+                        Text(installPath)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                Spacer()
+                IntegrationStateBadge(title: l10n[snapshot.state.titleKey], state: snapshot.state)
+                if snapshot.state != .unavailable {
+                    Button(l10n["open_app"]) {
+                        onOpen()
+                    }
+                    .buttonStyle(.link)
+                }
+            }
+        }
+    }
+}
+
+private struct CLIIntegrationRow: View {
+    @ObservedObject private var l10n = L10n.shared
+    let snapshot: CLIIntegrationSnapshot
+    let onOpenConfig: () -> Void
+    let onToggle: (Bool) -> Void
 
     @State private var enabled: Bool
 
-    init(name: String, source: String, configPath: String, fullPath: String,
-         installed: Bool, exists: Bool, onToggle: ((Bool) -> Void)? = nil) {
-        self.name = name
-        self.source = source
-        self.configPath = configPath
-        self.fullPath = fullPath
-        self.installed = installed
-        self.exists = exists
+    init(snapshot: CLIIntegrationSnapshot, onOpenConfig: @escaping () -> Void, onToggle: @escaping (Bool) -> Void) {
+        self.snapshot = snapshot
+        self.onOpenConfig = onOpenConfig
         self.onToggle = onToggle
-        _enabled = State(initialValue: ConfigInstaller.isEnabled(source: source))
+        _enabled = State(initialValue: ConfigInstaller.isEnabled(source: snapshot.integration.rawValue))
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                if let icon = cliIcon(source: source, size: 20) {
+                if let icon = cliIcon(source: snapshot.integration.rawValue, size: 20) {
                     Image(nsImage: icon)
                         .resizable()
                         .frame(width: 20, height: 20)
                 }
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(name)
-                    if !exists {
-                        Text(l10n["not_detected"])
-                            .font(.system(size: 11))
-                            .foregroundStyle(.tertiary)
-                    } else if installed {
-                        HStack(spacing: 2) {
-                            Text(configPath)
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(.tertiary)
-                            Button {
-                                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: fullPath)])
-                            } label: {
-                                Image(systemName: "arrow.right.circle")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.blue)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
+                    Text(snapshot.integration.title)
+                    Text(snapshot.detail)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
                 Spacer()
-                if exists {
-                    Toggle("", isOn: $enabled)
-                        .labelsHidden()
-                        .onChange(of: enabled) { _, newValue in
-                            ConfigInstaller.setEnabled(source: source, enabled: newValue)
-                            onToggle?(newValue)
-                        }
+                IntegrationStateBadge(title: l10n[snapshot.state.titleKey], state: snapshot.state)
+                if snapshot.configPath != nil {
+                    Button(l10n["open_config"]) {
+                        onOpenConfig()
+                    }
+                    .buttonStyle(.link)
                 }
+                Toggle("", isOn: $enabled)
+                    .labelsHidden()
+                    .onChange(of: enabled) { _, newValue in
+                        onToggle(newValue)
+                    }
             }
         }
+    }
+}
+
+private struct IntegrationStateBadge: View {
+    let title: String
+    let state: Any
+
+    private var color: Color {
+        switch state {
+        case let editor as EditorBridgeState:
+            switch editor {
+            case .live: return .green
+            case .installed: return .blue
+            case .unavailable: return .secondary
+            }
+        case let cli as CLIIntegrationState:
+            switch cli {
+            case .active: return .green
+            case .installed: return .blue
+            case .notInstalled: return .orange
+            case .cliNotFound: return .secondary
+            case .disabled: return .pink
+            }
+        default:
+            return .secondary
+        }
+    }
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(color)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(color.opacity(0.12))
+            )
+    }
+}
+
+private struct UsageProviderRow: View {
+    @ObservedObject private var l10n = L10n.shared
+    let provider: UsageProviderSnapshot
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(provider.source.title)
+                Spacer()
+                if let updatedAtUnix = provider.updatedAtUnix {
+                    Text(relativeTime(updatedAtUnix))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            HStack(spacing: 10) {
+                usageBadge(title: provider.primary.label, percentage: provider.primary.percentage, detail: provider.primary.detail)
+                usageBadge(title: provider.secondary.label, percentage: provider.secondary.percentage, detail: provider.secondary.detail)
+            }
+            if let summary = provider.summary, !summary.isEmpty {
+                Text(summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func usageBadge(title: String, percentage: Int, detail: String) -> some View {
+        let isRemaining = provider.source == .codex
+        let secondaryLabel = isRemaining ? l10n["usage_remaining"] : l10n["usage_used"]
+        let primaryValue = isRemaining ? 100 - percentage : percentage
+        let primaryLabel = l10n["usage_used"]
+
+        return VStack(alignment: .leading, spacing: 2) {
+            if isRemaining {
+                Text("\(title) · \(primaryLabel) \(primaryValue)% / \(secondaryLabel) \(percentage)%")
+                    .font(.system(size: 12, weight: .medium))
+            } else {
+                Text("\(title) · \(percentage)% \(secondaryLabel)")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            Text(detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func relativeTime(_ unix: TimeInterval) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for: Date(timeIntervalSince1970: unix), relativeTo: Date())
     }
 }
 
@@ -425,6 +768,7 @@ private struct CLIStatusRow: View {
 private struct AppearancePage: View {
     @ObservedObject private var l10n = L10n.shared
     @AppStorage(SettingsKey.maxVisibleSessions) private var maxVisibleSessions = SettingsDefaults.maxVisibleSessions
+    @AppStorage(SettingsKey.sessionGroupingMode) private var sessionGroupingMode = SettingsDefaults.sessionGroupingMode
     @AppStorage(SettingsKey.contentFontSize) private var contentFontSize = SettingsDefaults.contentFontSize
     @AppStorage(SettingsKey.aiMessageLines) private var aiMessageLines = SettingsDefaults.aiMessageLines
     @AppStorage(SettingsKey.showAgentDetails) private var showAgentDetails = SettingsDefaults.showAgentDetails
@@ -450,6 +794,13 @@ private struct AppearancePage: View {
                 } label: {
                     Text(l10n["max_visible_sessions"])
                     Text(l10n["max_visible_sessions_desc"])
+                }
+
+                Picker(l10n["session_grouping"], selection: $sessionGroupingMode) {
+                    Text(l10n["group_all"]).tag("all")
+                    Text(l10n["group_project"]).tag("project")
+                    Text(l10n["group_status"]).tag("status")
+                    Text(l10n["group_cli"]).tag("cli")
                 }
             }
 
@@ -673,6 +1024,13 @@ private struct SoundPage: View {
     @AppStorage(SettingsKey.soundApprovalNeeded) private var soundApprovalNeeded = SettingsDefaults.soundApprovalNeeded
     @AppStorage(SettingsKey.soundPromptSubmit) private var soundPromptSubmit = SettingsDefaults.soundPromptSubmit
     @AppStorage(SettingsKey.soundBoot) private var soundBoot = SettingsDefaults.soundBoot
+    @AppStorage(SettingsKey.soundPackID) private var soundPackID = SettingsDefaults.soundPackID
+    @State private var soundPacks: [SoundPack] = SoundPackCatalog.discoverPacks()
+    @State private var registryEntries: [SoundPackRegistryEntry] = SoundPackRegistry.loadCachedEntries()
+    @State private var isRefreshingRegistry = false
+    @State private var installingRegistryIDs: Set<String> = []
+    @State private var registryStatusMessage = ""
+    @State private var registryStatusIsError = false
 
     var body: some View {
         Form {
@@ -700,34 +1058,148 @@ private struct SoundPage: View {
                             .foregroundStyle(.secondary)
                             .frame(width: 36, alignment: .trailing)
                     }
+
+                    Picker(l10n["sound_pack"], selection: $soundPackID) {
+                        ForEach(soundPacks) { pack in
+                            Text(pack.title).tag(pack.id)
+                        }
+                    }
+
+                    HStack(spacing: 8) {
+                        if let selectedPack = soundPacks.first(where: { $0.id == soundPackID }) {
+                            Text(selectedPack.subtitle)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button(l10n["open_sound_pack_folder"]) {
+                            SoundPackCatalog.openUserPackRoot()
+                            refreshSoundPacks()
+                        }
+                        .buttonStyle(.link)
+
+                        Button(isRefreshingRegistry ? l10n["sound_pack_syncing"] : l10n["sound_pack_sync"]) {
+                            refreshRegistry()
+                        }
+                        .buttonStyle(.link)
+                        .disabled(isRefreshingRegistry)
+                    }
+                }
+            }
+
+            if !registryEntries.isEmpty || !registryStatusMessage.isEmpty {
+                Section(l10n["sound_pack_catalog"]) {
+                    if !registryStatusMessage.isEmpty {
+                        HStack(spacing: 6) {
+                            Image(systemName: registryStatusIsError ? "xmark.circle.fill" : "checkmark.circle.fill")
+                                .foregroundStyle(registryStatusIsError ? .red : .green)
+                            Text(registryStatusMessage)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    ForEach(registryEntries) { entry in
+                        RegistrySoundPackRow(
+                            entry: entry,
+                            isInstalled: soundPacks.contains(where: { $0.id == entry.id }),
+                            isInstalling: installingRegistryIDs.contains(entry.id),
+                            isSelected: soundPackID == entry.id
+                        ) {
+                            useOrInstall(entry)
+                        }
+                    }
                 }
             }
 
             if soundEnabled {
                 Section(l10n["sessions"]) {
-                    SoundEventRow(title: l10n["session_start"], subtitle: l10n["new_claude_session"], soundName: "8bit_start", isOn: $soundSessionStart)
-                    SoundEventRow(title: l10n["task_complete"], subtitle: l10n["ai_completed_reply"], soundName: "8bit_complete", isOn: $soundTaskComplete)
-                    SoundEventRow(title: l10n["task_error"], subtitle: l10n["tool_or_api_error"], soundName: "8bit_error", isOn: $soundTaskError)
+                    SoundEventRow(title: l10n["session_start"], subtitle: l10n["new_claude_session"], cue: .sessionStart, isOn: $soundSessionStart)
+                    SoundEventRow(title: l10n["task_complete"], subtitle: l10n["ai_completed_reply"], cue: .taskComplete, isOn: $soundTaskComplete)
+                    SoundEventRow(title: l10n["task_error"], subtitle: l10n["tool_or_api_error"], cue: .taskError, isOn: $soundTaskError)
                 }
 
                 Section(l10n["interaction"]) {
-                    SoundEventRow(title: l10n["approval_needed"], subtitle: l10n["waiting_approval_desc"], soundName: "8bit_approval", isOn: $soundApprovalNeeded)
-                    SoundEventRow(title: l10n["task_confirmation"], subtitle: l10n["you_sent_message"], soundName: "8bit_submit", isOn: $soundPromptSubmit)
+                    SoundEventRow(title: l10n["approval_needed"], subtitle: l10n["waiting_approval_desc"], cue: .inputRequired, isOn: $soundApprovalNeeded)
+                    SoundEventRow(title: l10n["task_confirmation"], subtitle: l10n["you_sent_message"], cue: .taskAcknowledge, isOn: $soundPromptSubmit)
                 }
 
                 Section(l10n["system_section"]) {
-                    SoundEventRow(title: l10n["boot_sound"], subtitle: l10n["boot_sound_desc"], soundName: "8bit_boot", isOn: $soundBoot)
+                    BootSoundRow(title: l10n["boot_sound"], subtitle: l10n["boot_sound_desc"], isOn: $soundBoot)
                 }
             }
         }
         .formStyle(.grouped)
+        .onAppear {
+            refreshSoundPacks()
+            registryEntries = SoundPackRegistry.loadCachedEntries()
+        }
+    }
+
+    private func refreshSoundPacks() {
+        soundPacks = SoundPackCatalog.discoverPacks()
+        if !soundPacks.contains(where: { $0.id == soundPackID }) {
+            soundPackID = SettingsDefaults.soundPackID
+        }
+    }
+
+    private func refreshRegistry() {
+        isRefreshingRegistry = true
+        registryStatusMessage = ""
+        registryStatusIsError = false
+
+        Task {
+            do {
+                let entries = try await SoundPackRegistry.refreshEntries()
+                await MainActor.run {
+                    registryEntries = entries
+                    isRefreshingRegistry = false
+                    registryStatusMessage = l10n["sound_pack_sync_complete"]
+                    registryStatusIsError = false
+                }
+            } catch {
+                await MainActor.run {
+                    isRefreshingRegistry = false
+                    registryStatusMessage = error.localizedDescription
+                    registryStatusIsError = true
+                }
+            }
+        }
+    }
+
+    private func useOrInstall(_ entry: SoundPackRegistryEntry) {
+        if soundPacks.contains(where: { $0.id == entry.id }) {
+            soundPackID = entry.id
+            return
+        }
+
+        installingRegistryIDs.insert(entry.id)
+        registryStatusMessage = ""
+
+        Task {
+            do {
+                _ = try await SoundPackRegistry.install(entry: entry)
+                await MainActor.run {
+                    installingRegistryIDs.remove(entry.id)
+                    refreshSoundPacks()
+                    soundPackID = entry.id
+                    registryStatusMessage = l10n["sound_pack_install_complete"]
+                    registryStatusIsError = false
+                }
+            } catch {
+                await MainActor.run {
+                    installingRegistryIDs.remove(entry.id)
+                    registryStatusMessage = error.localizedDescription
+                    registryStatusIsError = true
+                }
+            }
+        }
     }
 }
 
 private struct SoundEventRow: View {
     let title: String
     var subtitle: String? = nil
-    let soundName: String
+    let cue: SoundCue
     @Binding var isOn: Bool
 
     var body: some View {
@@ -742,7 +1214,7 @@ private struct SoundEventRow: View {
             }
             Spacer(minLength: 16)
             Button {
-                SoundManager.shared.preview(soundName)
+                SoundManager.shared.preview(cue: cue)
             } label: {
                 Image(systemName: "play.circle.fill")
                     .font(.system(size: 22))
@@ -752,6 +1224,107 @@ private struct SoundEventRow: View {
             Toggle("", isOn: $isOn)
                 .labelsHidden()
         }
+    }
+}
+
+private struct BootSoundRow: View {
+    let title: String
+    var subtitle: String? = nil
+    @Binding var isOn: Bool
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            Spacer(minLength: 16)
+            Button {
+                SoundManager.shared.previewBoot()
+            } label: {
+                Image(systemName: "play.circle.fill")
+                    .font(.system(size: 22))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            Toggle("", isOn: $isOn)
+                .labelsHidden()
+        }
+    }
+}
+
+private struct RegistrySoundPackRow: View {
+    let entry: SoundPackRegistryEntry
+    let isInstalled: Bool
+    let isInstalling: Bool
+    let isSelected: Bool
+    let action: () -> Void
+
+    private var accent: Color {
+        color(from: entry.accentHex) ?? .blue
+    }
+
+    private var actionTitle: String {
+        if isInstalling {
+            return L10n.shared["sound_pack_installing"]
+        }
+        if isInstalled {
+            return isSelected ? L10n.shared["sound_pack_in_use"] : L10n.shared["sound_pack_use"]
+        }
+        return L10n.shared["sound_pack_install"]
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: entry.systemName)
+                .frame(width: 20)
+                .foregroundStyle(accent)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(entry.displayName)
+                    Text(entry.trustLabel)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(accent)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule(style: .continuous).fill(accent.opacity(0.12)))
+                }
+
+                Text(entry.compactMeta)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+
+                Text(entry.description)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            Spacer()
+
+            Button(actionTitle) {
+                action()
+            }
+            .buttonStyle(.bordered)
+            .disabled(isInstalling)
+        }
+    }
+
+    private func color(from hex: String) -> Color? {
+        var raw = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        if raw.hasPrefix("#") {
+            raw.removeFirst()
+        }
+        guard raw.count == 6, let value = Int(raw, radix: 16) else { return nil }
+        let red = Double((value >> 16) & 0xFF) / 255.0
+        let green = Double((value >> 8) & 0xFF) / 255.0
+        let blue = Double(value & 0xFF) / 255.0
+        return Color(red: red, green: green, blue: blue)
     }
 }
 

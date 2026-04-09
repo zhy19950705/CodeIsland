@@ -35,6 +35,16 @@ struct NotchPanelView: View {
     private var shouldShowExpanded: Bool {
         showBar && appState.surface.isExpanded
     }
+    private var compactUsageSource: UsageProviderSource? {
+        let sessionId = appState.rotatingSessionId ?? appState.activeSessionId ?? appState.sessions.keys.sorted().first
+        let source = sessionId.flatMap { appState.sessions[$0]?.source } ?? appState.primarySource
+        guard source == UsageProviderSource.codex.rawValue else { return nil }
+        return .codex
+    }
+    private var showCompactUsageBadge: Bool {
+        guard !shouldShowExpanded, let source = compactUsageSource else { return false }
+        return appState.usageSnapshot.providers.contains(where: { $0.source == source })
+    }
 
     /// Mascot size — fits within the menu bar height
     private var mascotSize: CGFloat { min(27, notchHeight - 6) }
@@ -52,7 +62,8 @@ struct NotchPanelView: View {
         let extra: CGFloat = appState.status == .idle ? 0 : 20
         // Reserve space for tool status — proportional to screen width
         let toolExtra: CGFloat = displayedToolStatus ? (hasNotch ? screenWidth * 0.03 : screenWidth * 0.04) : 0
-        return notchW + wing * 2 + extra + toolExtra
+        let usageExtra: CGFloat = showCompactUsageBadge ? (hasNotch ? 76 : 90) : 0
+        return notchW + wing * 2 + extra + toolExtra + usageExtra
     }
 
     var body: some View {
@@ -106,6 +117,17 @@ struct NotchPanelView: View {
                                 onAllow: { appState.approvePermission(always: false) },
                                 onAlwaysAllow: { appState.approvePermission(always: true) },
                                 onDeny: { appState.denyPermission() }
+                            )
+                            .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
+                        } else if let preview = appState.previewApprovalPayload {
+                            ApprovalBar(
+                                tool: preview.tool,
+                                toolInput: preview.toolInput,
+                                queuePosition: 1,
+                                queueTotal: 1,
+                                onAllow: { },
+                                onAlwaysAllow: { },
+                                onDeny: { }
                             )
                             .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
                         }
@@ -280,7 +302,7 @@ private struct CompactLeftWing: View {
                 AppLogoView(size: 36, showBackground: false)
                 if appState.sessions.count > 1 {
                     HStack(spacing: 1) {
-                        ForEach([("all", "ALL"), ("status", "STA"), ("cli", "CLI")], id: \.0) { tag, label in
+                        ForEach([("all", "ALL"), ("project", "PRJ"), ("status", "STA"), ("cli", "CLI")], id: \.0) { tag, label in
                             let selected = groupingMode == tag
                             Button {
                                 withAnimation(.easeInOut(duration: 0.15)) { groupingMode = tag }
@@ -358,6 +380,14 @@ private struct CompactRightWing: View {
         guard let sid = displaySessionId, let cwd = appState.sessions[sid]?.cwd, !cwd.isEmpty else { return nil }
         return (cwd as NSString).lastPathComponent
     }
+    private var displaySource: String {
+        guard let sid = displaySessionId else { return appState.primarySource }
+        return appState.sessions[sid]?.source ?? appState.primarySource
+    }
+    private var codexUsage: UsageProviderSnapshot? {
+        guard displaySource == UsageProviderSource.codex.rawValue else { return nil }
+        return appState.usageSnapshot.providers.first(where: { $0.source == .codex })
+    }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -378,6 +408,10 @@ private struct CompactRightWing: View {
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(Color(red: 1.0, green: 0.7, blue: 0.28))
                         .symbolEffect(.pulse, options: .repeating)
+                }
+
+                if let codexUsage {
+                    CompactUsageBadge(provider: codexUsage)
                 }
 
                 if showToolStatus {
@@ -414,6 +448,53 @@ private struct CompactRightWing: View {
             }
         }
         .padding(.trailing, 6)
+    }
+}
+
+private struct CompactUsageBadge: View {
+    @ObservedObject private var l10n = L10n.shared
+    let provider: UsageProviderSnapshot
+
+    private var primary: UsageWindowStat { provider.primary }
+    private var tint: Color { Color(hex: primary.tintHex) }
+    private var label: String {
+        provider.source == .codex ? l10n["usage_remaining"] : l10n["usage_used"]
+    }
+    private var helpText: String {
+        let headline: String
+        if provider.source == .codex {
+            headline = "\(provider.source.title) \(primary.label) \(l10n["usage_used"]): \(100 - primary.percentage)% · \(l10n["usage_remaining"]): \(primary.percentage)%"
+        } else {
+            headline = "\(provider.source.title) \(primary.label) \(label): \(primary.percentage)%"
+        }
+        var lines = [headline, primary.detail]
+        if let summary = provider.summary, !summary.isEmpty {
+            lines.append(summary)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Text(primary.label.uppercased())
+                .foregroundStyle(.white.opacity(0.55))
+            Text(label.uppercased())
+                .foregroundStyle(.white.opacity(0.75))
+            Text("\(primary.percentage)%")
+                .foregroundStyle(tint)
+        }
+        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(
+            Capsule(style: .continuous)
+                .fill(.white.opacity(0.08))
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .strokeBorder(tint.opacity(0.35), lineWidth: 1)
+        )
+        .help(helpText)
     }
 }
 
@@ -1055,14 +1136,49 @@ private struct SessionListView: View {
     @AppStorage(SettingsKey.sessionGroupingMode) private var groupingMode = SettingsDefaults.sessionGroupingMode
     @AppStorage(SettingsKey.maxVisibleSessions) private var maxVisibleSessions = SettingsDefaults.maxVisibleSessions
 
+    /// Sort priority: attention-needed > active > recent activity > stable ID
+    private func sortedByActivity(_ ids: [String]) -> [String] {
+        ids.sorted { a, b in
+            guard let sa = appState.sessions[a], let sb = appState.sessions[b] else { return a < b }
+            let attA = sa.status == .waitingApproval || sa.status == .waitingQuestion
+            let attB = sb.status == .waitingApproval || sb.status == .waitingQuestion
+            if attA != attB { return attA }
+            let actA = sa.status != .idle
+            let actB = sb.status != .idle
+            if actA != actB { return actA }
+            if sa.lastActivity != sb.lastActivity { return sa.lastActivity > sb.lastActivity }
+            return a < b
+        }
+    }
+
+    /// Most recent activity date among sessions in a group
+    private func groupLatestActivity(_ ids: [String]) -> Date {
+        ids.compactMap { appState.sessions[$0]?.lastActivity }.max() ?? .distantPast
+    }
+
     private var groupedSessions: [(header: String, source: String?, ids: [String])] {
         if let only = onlySessionId, appState.sessions[only] != nil {
             return [("", nil, [only])]
         }
 
-        let sorted = appState.sessions.keys.sorted()
+        let allIds = Array(appState.sessions.keys)
 
         switch groupingMode {
+        case "project":
+            var projectGroups: [String: [String]] = [:]
+            for id in allIds {
+                let project = appState.sessions[id]?.displayName ?? "Session"
+                projectGroups[project, default: []].append(id)
+            }
+            // Sort groups by most recent activity within each group
+            let sortedProjects = projectGroups.keys.sorted { a, b in
+                groupLatestActivity(projectGroups[a]!) > groupLatestActivity(projectGroups[b]!)
+            }
+            return sortedProjects.map { project in
+                let ids = sortedByActivity(projectGroups[project]!)
+                return ("\(project) (\(ids.count))", nil, ids)
+            }
+
         case "status":
             let l10n = L10n.shared
             let groups: [(Set<AgentStatus>, String)] = [
@@ -1073,10 +1189,10 @@ private struct SessionListView: View {
             ]
             var result: [(String, String?, [String])] = []
             for (statuses, label) in groups {
-                let ids = sorted.filter { id in
+                let ids = sortedByActivity(allIds.filter { id in
                     guard let s = appState.sessions[id] else { return false }
                     return statuses.contains(s.status)
-                }
+                })
                 if !ids.isEmpty {
                     result.append(("\(label) (\(ids.count))", nil, ids))
                 }
@@ -1098,22 +1214,22 @@ private struct SessionListView: View {
             var result: [(String, String?, [String])] = []
             var seen = Set<String>()
             for cli in cliOrder {
-                let ids = sorted.filter { id in
+                let ids = sortedByActivity(allIds.filter { id in
                     appState.sessions[id]?.source == cli.source
-                }
+                })
                 ids.forEach { seen.insert($0) }
                 if !ids.isEmpty {
                     result.append(("\(cli.name) (\(ids.count))", cli.source, ids))
                 }
             }
-            let remaining = sorted.filter { !seen.contains($0) }
+            let remaining = sortedByActivity(allIds.filter { !seen.contains($0) })
             if !remaining.isEmpty {
                 result.append(("\(L10n.shared["other"]) (\(remaining.count))", nil, remaining))
             }
             return result
 
         default: // "all"
-            return [("", nil, sorted)]
+            return [("", nil, sortedByActivity(allIds))]
         }
     }
 
@@ -1293,10 +1409,55 @@ private struct ProjectNameLink: View {
             }
             .onTapGesture {
                 if let cwd = cwd {
-                    NSWorkspace.shared.open(URL(fileURLWithPath: cwd))
+                    Self.openInEditor(cwd)
                 }
             }
             .help(cwd != nil ? "\(L10n.shared["open_path"]) \(cwd!)" : "")
+    }
+
+    private static let editorCandidates: [(executable: String, arguments: [String])] = [
+        ("code", ["--reuse-window"]),
+        ("cursor", ["--reuse-window"]),
+        ("windsurf", ["--reuse-window"]),
+    ]
+
+    private static func openInEditor(_ path: String) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            for candidate in editorCandidates {
+                if let resolved = resolveExecutable(candidate.executable) {
+                    let process = Process()
+                    process.executableURL = URL(fileURLWithPath: resolved)
+                    process.arguments = candidate.arguments + [path]
+                    if (try? process.run()) != nil { return }
+                }
+            }
+            DispatchQueue.main.async {
+                NSWorkspace.shared.open(URL(fileURLWithPath: path))
+            }
+        }
+    }
+
+    private static func resolveExecutable(_ name: String) -> String? {
+        let paths = [
+            "/opt/homebrew/bin/\(name)",
+            "/usr/local/bin/\(name)",
+            "/usr/bin/\(name)",
+        ]
+        for path in paths {
+            if FileManager.default.isExecutableFile(atPath: path) { return path }
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+        process.arguments = [name]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        guard (try? process.run()) != nil else { return nil }
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return nil }
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return output?.isEmpty == false ? output : nil
     }
 }
 
@@ -1485,7 +1646,7 @@ private struct SessionCard: View {
         .onHover { h in withAnimation(NotchAnimation.micro) { hovering = h } }
         .onTapGesture {
             if isCompletion {
-                TerminalActivator.activate(session: session, sessionId: sessionId)
+                SessionJumpRouter.jump(to: session, sessionId: sessionId)
             }
         }
     }
@@ -1735,7 +1896,7 @@ private struct TerminalJumpButton: View {
 
     var body: some View {
         Button {
-            TerminalActivator.activate(session: session, sessionId: sessionId)
+            SessionJumpRouter.jump(to: session, sessionId: sessionId)
         } label: {
             HStack(spacing: 4) {
                 if let icon = termIcon {
@@ -1853,6 +2014,21 @@ private struct Line: Shape {
         p.move(to: CGPoint(x: rect.minX, y: rect.midY))
         p.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
         return p
+    }
+}
+
+private extension Color {
+    init(hex: String) {
+        let sanitized = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        guard sanitized.count == 6, let value = Int(sanitized, radix: 16) else {
+            self = .white
+            return
+        }
+
+        let red = Double((value >> 16) & 0xFF) / 255
+        let green = Double((value >> 8) & 0xFF) / 255
+        let blue = Double(value & 0xFF) / 255
+        self = Color(red: red, green: green, blue: blue)
     }
 }
 

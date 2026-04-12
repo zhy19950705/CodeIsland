@@ -46,8 +46,8 @@ actor DiagnosticsExporter {
     ) async throws -> DiagnosticsExportResult {
         let timestamp = Self.archiveTimestamp()
         let tempRoot = fileManager.temporaryDirectory
-            .appendingPathComponent("CodeIsland-Diagnostics-\(UUID().uuidString)", isDirectory: true)
-        let exportRoot = tempRoot.appendingPathComponent("CodeIsland-Diagnostics-\(timestamp)", isDirectory: true)
+            .appendingPathComponent("SuperIsland-Diagnostics-\(UUID().uuidString)", isDirectory: true)
+        let exportRoot = tempRoot.appendingPathComponent("SuperIsland-Diagnostics-\(timestamp)", isDirectory: true)
         var warnings: [String] = []
 
         try fileManager.createDirectory(at: exportRoot, withIntermediateDirectories: true)
@@ -71,7 +71,7 @@ actor DiagnosticsExporter {
             (fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".codex/hooks.json"), "configs/codex-hooks.json"),
             (fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".codex/config.toml"), "configs/codex-config.toml"),
             (fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".config/opencode/config.json"), "configs/opencode-config.json"),
-            (fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".config/opencode/plugins/codeisland.js"), "configs/opencode-plugin.js"),
+            (fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".config/opencode/plugins/superisland.js"), "configs/opencode-plugin.js"),
         ]
 
         for item in copiedFiles {
@@ -101,7 +101,7 @@ actor DiagnosticsExporter {
         do {
             try await writeCommandOutput(
                 executable: "/usr/bin/defaults",
-                arguments: ["read", Bundle.main.bundleIdentifier ?? "com.codeisland"],
+                arguments: ["read", Bundle.main.bundleIdentifier ?? "com.superisland"],
                 to: exportRoot.appendingPathComponent("logs/defaults.txt")
             )
         } catch {
@@ -177,7 +177,7 @@ actor DiagnosticsExporter {
                     continuation.resume(returning: output)
                 } else {
                     continuation.resume(throwing: NSError(
-                        domain: "CodeIslandDiagnostics",
+                        domain: "SuperIslandDiagnostics",
                         code: Int(process.terminationStatus),
                         userInfo: [NSLocalizedDescriptionKey: error.isEmpty ? output : error]
                     ))

@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "CodeIsland",
+    name: "SuperIsland",
     platforms: [.macOS(.v14)],
     targets: [
         .target(
@@ -18,7 +18,7 @@ let package = Package(
             ]
         ),
         .executableTarget(
-            name: "codeisland-bridge",
+            name: "superisland-bridge",
             dependencies: ["CodeIslandCore"],
             path: "Sources/CodeIslandBridge"
         ),

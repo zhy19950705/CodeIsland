@@ -342,7 +342,7 @@ private func debugLog(_ message: String) {
     guard ProcessInfo.processInfo.environment["CODEISLAND_DEBUG"] != nil else { return }
     let timestamp = ISO8601DateFormatter().string(from: Date())
     let line = "[\(timestamp)] \(message)\n"
-    let path = "/tmp/codeisland-bridge.log"
+    let path = "/tmp/superisland-bridge.log"
     if let handle = FileHandle(forWritingAtPath: path) {
         handle.seekToEndOfFile()
         handle.write(Data(line.utf8))
@@ -506,7 +506,8 @@ private struct UsageMonitorCommand {
                     ),
                     updatedAtUnix: now,
                     summary: nil,
-                    monthly: nil
+                    monthly: nil,
+                    history: nil
                 )
             )
         }
@@ -514,7 +515,7 @@ private struct UsageMonitorCommand {
         if providers.contains("codex"), let quota = fetchCodexQuota() {
             let primaryRemaining = clampPercentage(100 - quota.primary.usedPercent)
             let secondaryRemaining = clampPercentage(100 - quota.secondary.usedPercent)
-            let monthlyUsage = CodexMonthlyUsageCalculator.loadCurrentMonth()
+            let usageHistory = CodexMonthlyUsageCalculator.loadUsageHistory()
             snapshots.append(
                 UsageProviderSnapshot(
                     source: .codex,
@@ -532,7 +533,8 @@ private struct UsageMonitorCommand {
                     ),
                     updatedAtUnix: now,
                     summary: quota.summary,
-                    monthly: monthlyUsage
+                    monthly: usageHistory.monthly,
+                    history: usageHistory.history.isEmpty ? nil : usageHistory.history
                 )
             )
         }

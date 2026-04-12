@@ -26,9 +26,9 @@ class SettingsWindowController {
         let screen = NSScreen.main ?? NSScreen.screens.first
         let screenW = screen?.frame.width ?? 1440
         let screenH = screen?.frame.height ?? 900
-        let winW = min(660, screenW * 0.5)
-        let winH = min(540, screenH * 0.6)
-        let minSize = NSSize(width: min(560, screenW * 0.4), height: min(420, screenH * 0.4))
+        let winW = min(840, screenW * 0.85)
+        let winH = min(700, screenH * 0.78)
+        let minSize = NSSize(width: min(720, screenW * 0.55), height: min(540, screenH * 0.55))
 
         if let window = window {
             window.contentMinSize = minSize

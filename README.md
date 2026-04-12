@@ -80,6 +80,8 @@ cd CodeIsland
 
 # Development (debug build + launch)
 swift build && open .build/debug/CodeIsland.app
+# or
+swift run CodeIsland
 
 # Release (universal binary: Apple Silicon + Intel)
 ./build.sh

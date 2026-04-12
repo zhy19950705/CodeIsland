@@ -10,7 +10,7 @@ enum SettingsNotificationTester {
         process.arguments = [
             "-e",
             """
-            display notification "This is a test notification from CodeIsland Settings." with title "CodeIsland" subtitle "Settings Test" sound name "Glass"
+            display notification "This is a test notification from SuperIsland Settings." with title "SuperIsland" subtitle "Settings Test" sound name "Glass"
             """
         ]
 
@@ -19,7 +19,7 @@ enum SettingsNotificationTester {
 
         guard process.terminationStatus == 0 else {
             throw NSError(
-                domain: "CodeIsland.SettingsNotificationTester",
+                domain: "SuperIsland.SettingsNotificationTester",
                 code: Int(process.terminationStatus),
                 userInfo: [NSLocalizedDescriptionKey: "Failed to send macOS test notification."]
             )

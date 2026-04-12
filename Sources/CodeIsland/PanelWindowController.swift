@@ -236,7 +236,7 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         panel.orderFrontRegardless()
 
         // Screen change observer
-        NotificationCenter.default.addObserver(
+        let screenChangeObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil,
             queue: .main
@@ -249,9 +249,10 @@ class PanelWindowController: NSObject, NSWindowDelegate {
                 self?.refreshCurrentScreen(forceRebuild: true)
             }
         }
+        settingsObservers.append(screenChangeObserver)
 
         // Active space change — check fullscreen
-        NSWorkspace.shared.notificationCenter.addObserver(
+        let spaceChangeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification,
             object: nil,
             queue: .main
@@ -269,9 +270,10 @@ class PanelWindowController: NSObject, NSWindowDelegate {
                 // If latch is set but not detected: ignore (poller will handle exit)
             }
         }
+        settingsObservers.append(spaceChangeObserver)
 
         // Frontmost app change
-        NSWorkspace.shared.notificationCenter.addObserver(
+        let appActivateObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
             queue: .main
@@ -282,6 +284,7 @@ class PanelWindowController: NSObject, NSWindowDelegate {
                 if !self.fullscreenLatch { self.updateVisibility() }
             }
         }
+        settingsObservers.append(appActivateObserver)
 
         let panelStateObserver = NotificationCenter.default.addObserver(
             forName: .codeIslandPanelStateDidChange,

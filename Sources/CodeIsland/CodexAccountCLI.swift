@@ -202,23 +202,23 @@ struct CodexAccountCLICommand {
 
     private func printHelp() {
         let help = """
-        CodeIsland Codex account commands
+        SuperIsland Codex account commands
 
         Usage:
-          CodeIsland --codex-auth status [--json]
-          CodeIsland --codex-auth list [--json]
-          CodeIsland --codex-auth sync
-          CodeIsland --codex-auth import <path> [--alias <alias>] [--cpa] [--purge]
-          CodeIsland --codex-auth switch <query>
-          CodeIsland --codex-auth activate <account-key>
-          CodeIsland --codex-auth remove <query>
-          CodeIsland --codex-auth remove --account-key <account-key>
-          CodeIsland --codex-auth remove --all
-          CodeIsland --codex-auth login [--device-auth]
-          CodeIsland --codex-auth config auto enable|disable
-          CodeIsland --codex-auth config auto [--5h <percent>] [--weekly <percent>]
-          CodeIsland --codex-auth config api enable|disable
-          CodeIsland --codex-auth daemon --once|--watch
+          SuperIsland --codex-auth status [--json]
+          SuperIsland --codex-auth list [--json]
+          SuperIsland --codex-auth sync
+          SuperIsland --codex-auth import <path> [--alias <alias>] [--cpa] [--purge]
+          SuperIsland --codex-auth switch <query>
+          SuperIsland --codex-auth activate <account-key>
+          SuperIsland --codex-auth remove <query>
+          SuperIsland --codex-auth remove --account-key <account-key>
+          SuperIsland --codex-auth remove --all
+          SuperIsland --codex-auth login [--device-auth]
+          SuperIsland --codex-auth config auto enable|disable
+          SuperIsland --codex-auth config auto [--5h <percent>] [--weekly <percent>]
+          SuperIsland --codex-auth config api enable|disable
+          SuperIsland --codex-auth daemon --once|--watch
         """
         print(help)
     }

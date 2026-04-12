@@ -104,7 +104,7 @@ final class StatusItemController: NSObject {
                 text: "",
                 sessionCount: 0,
                 tone: .idle,
-                tooltip: "CodeIsland",
+                tooltip: "SuperIsland",
                 source: nil
             )
         }
@@ -131,7 +131,7 @@ final class StatusItemController: NSObject {
                 text: showDetail ? "\(sessionCount)" : "",
                 sessionCount: sessionCount,
                 tone: .idle,
-                tooltip: "CodeIsland",
+                tooltip: "SuperIsland",
                 source: nil
             )
         }
@@ -251,7 +251,7 @@ final class StatusItemController: NSObject {
             tone: currentSummary?.tone ?? .idle
         )
         button.imageScaling = .scaleProportionallyDown
-        button.toolTip = currentSummary?.tooltip ?? "CodeIsland"
+        button.toolTip = currentSummary?.tooltip ?? "SuperIsland"
         button.title = ""
         button.attributedTitle = NSAttributedString(string: "")
         button.imagePosition = usesDetailText ? .imageTrailing : .imageOnly

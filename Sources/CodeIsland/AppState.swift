@@ -105,6 +105,13 @@ final class AppState {
     @ObservationIgnored private var cachedSessionListPresentations: [SessionListCacheKey: CachedSessionListPresentation] = [:]
     private(set) var pendingCompletionReviewSessionIds: Set<String> = []
 
+    /// Throttle for tab-level visibility checks to avoid excessive AppleScript calls.
+    /// `isSessionTabVisible` uses System Events which can trigger TCC prompts on macOS 15+.
+    /// Minimum interval between checks (seconds).
+    private let minTabVisibilityCheckInterval: TimeInterval = 2.0
+    private var lastTabVisibilityCheckTime: Date = .distantPast
+    private var lastTabVisibilityCheckResult: Bool = false
+
     var rotatingSessionId: String?
     var rotatingSession: SessionSnapshot? {
         guard let rid = rotatingSessionId else { return nil }
@@ -461,8 +468,25 @@ final class AppState {
         // Terminal IS frontmost — check tab-level on background thread
         guard let session = sessions[sessionId] else { return }
         let sessionCopy = session
+
+        // Throttle tab-level visibility checks to avoid excessive AppleScript calls.
+        // System Events queries can trigger TCC "Screen Recording" prompts on macOS 15+.
+        let now = Date()
+        let shouldSkipCheck = now.timeIntervalSince(lastTabVisibilityCheckTime) < minTabVisibilityCheckInterval
+
         Task.detached {
-            let tabVisible = TerminalVisibilityDetector.isSessionTabVisible(sessionCopy)
+            let tabVisible: Bool
+            if shouldSkipCheck {
+                // Reuse recent result to avoid TCC churn
+                tabVisible = await MainActor.run { [weak self] in self?.lastTabVisibilityCheckResult ?? false }
+            } else {
+                tabVisible = TerminalVisibilityDetector.isSessionTabVisible(sessionCopy)
+                await MainActor.run { [weak self] in
+                    self?.lastTabVisibilityCheckTime = now
+                    self?.lastTabVisibilityCheckResult = tabVisible
+                }
+            }
+
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 // Verify state hasn't changed while we were checking

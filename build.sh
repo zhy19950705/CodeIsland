@@ -1,7 +1,8 @@
 #!/bin/bash
 set -e
 
-APP_NAME="CodeIsland"
+APP_NAME="SuperIsland"
+APP_EXECUTABLE="CodeIsland"
 BUILD_DIR=".build/release"
 APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
 ICON_CATALOG="Assets.xcassets"
@@ -22,10 +23,10 @@ mkdir -p "$APP_BUNDLE/Contents/MacOS"
 mkdir -p "$APP_BUNDLE/Contents/Helpers"
 mkdir -p "$APP_BUNDLE/Contents/Resources"
 
-lipo -create "$ARM_DIR/$APP_NAME" "$X86_DIR/$APP_NAME" \
-     -output "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
-lipo -create "$ARM_DIR/codeisland-bridge" "$X86_DIR/codeisland-bridge" \
-     -output "$APP_BUNDLE/Contents/Helpers/codeisland-bridge"
+lipo -create "$ARM_DIR/$APP_EXECUTABLE" "$X86_DIR/$APP_EXECUTABLE" \
+     -output "$APP_BUNDLE/Contents/MacOS/$APP_EXECUTABLE"
+lipo -create "$ARM_DIR/superisland-bridge" "$X86_DIR/superisland-bridge" \
+     -output "$APP_BUNDLE/Contents/Helpers/superisland-bridge"
 cp Info.plist "$APP_BUNDLE/Contents/Info.plist"
 
 echo "Compiling app icon assets..."
@@ -54,7 +55,7 @@ for bundle in .build/*/release/*.bundle; do
 done
 
 echo "Ad-hoc code signing..."
-if ! codesign --force --sign - "$APP_BUNDLE/Contents/Helpers/codeisland-bridge"; then
+if ! codesign --force --sign - "$APP_BUNDLE/Contents/Helpers/superisland-bridge"; then
     echo "warning: helper codesign failed, continuing with unsigned helper"
 fi
 if ! codesign --force --sign - "$APP_BUNDLE"; then

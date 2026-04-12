@@ -3,12 +3,12 @@ import Foundation
 // MARK: - Hook Identifiers
 
 private enum HookId {
-    static let current = "codeisland"
-    static let legacy = "vibenotch"
+    static let current = "superisland"
+    static let legacy = ["codeisland", "vibenotch"]
     static func isOurs(_ s: String) -> Bool {
         let lowered = s.lowercased()
         return lowered.contains(current)
-            || lowered.contains(legacy)
+            || legacy.contains(where: lowered.contains)
             || lowered.contains("--bridge-codex-hook")
     }
 }
@@ -43,11 +43,11 @@ struct CLIConfig {
 }
 
 struct ConfigInstaller {
-    private static let bridgePath = NSHomeDirectory() + "/.claude/hooks/codeisland-bridge"
-    private static let hookScriptPath = NSHomeDirectory() + "/.claude/hooks/codeisland-hook.sh"
-    private static let hookCommand = "~/.claude/hooks/codeisland-hook.sh"
+    private static let bridgePath = NSHomeDirectory() + "/.claude/hooks/superisland-bridge"
+    private static let hookScriptPath = NSHomeDirectory() + "/.claude/hooks/superisland-hook.sh"
+    private static let hookCommand = "~/.claude/hooks/superisland-hook.sh"
     /// Absolute path for external CLI hooks — avoids tilde expansion issues in IDE environments
-    private static let bridgeCommand = NSHomeDirectory() + "/.claude/hooks/codeisland-bridge"
+    private static let bridgeCommand = NSHomeDirectory() + "/.claude/hooks/superisland-bridge"
 
     // MARK: - All supported CLIs
 
@@ -179,7 +179,7 @@ struct ConfigInstaller {
         // GitHub Copilot CLI
         CLIConfig(
             name: "Copilot", source: "copilot",
-            configPath: ".copilot/hooks/codeisland.json", configKey: "hooks",
+            configPath: ".copilot/hooks/superisland.json", configKey: "hooks",
             format: .copilot,
             events: [
                 ("sessionStart", 5, false),
@@ -203,14 +203,14 @@ struct ConfigInstaller {
     /// Hook script for Claude Code (dispatcher: bridge binary → nc fallback)
     private static let hookScript = """
         #!/bin/bash
-        # CodeIsland hook v\(hookScriptVersion) — native bridge with shell fallback
-        BRIDGE="$HOME/.claude/hooks/codeisland-bridge"
+        # SuperIsland hook v\(hookScriptVersion) — native bridge with shell fallback
+        BRIDGE="$HOME/.claude/hooks/superisland-bridge"
         if [ -x "$BRIDGE" ]; then
           "$BRIDGE" "$@"
           exit $?
         fi
         # Fallback: original shell approach (no binary installed yet)
-        SOCK="/tmp/codeisland-$(id -u).sock"
+        SOCK="/tmp/superisland-$(id -u).sock"
         [ -S "$SOCK" ] || exit 0
         INPUT=$(cat)
         _ITERM_GUID="${ITERM_SESSION_ID##*:}"
@@ -226,7 +226,7 @@ struct ConfigInstaller {
     // MARK: - OpenCode plugin paths
 
     private static let opencodePluginDir = NSHomeDirectory() + "/.config/opencode/plugins"
-    private static let opencodePluginPath = NSHomeDirectory() + "/.config/opencode/plugins/codeisland.js"
+    private static let opencodePluginPath = NSHomeDirectory() + "/.config/opencode/plugins/superisland.js"
     private static let opencodeConfigPath = NSHomeDirectory() + "/.config/opencode/config.json"
 
     // MARK: - Install / Uninstall
@@ -734,7 +734,9 @@ struct ConfigInstaller {
             if let existing = fm.contents(atPath: hookScriptPath),
                let str = String(data: existing, encoding: .utf8) {
                 // Update if script doesn't contain bridge dispatcher OR version is outdated
-                let hasCurrentVersion = str.contains("# CodeIsland hook v\(hookScriptVersion)")
+                let hasCurrentVersion =
+                    str.contains("# SuperIsland hook v\(hookScriptVersion)")
+                    || str.contains("# CodeIsland hook v\(hookScriptVersion)")
                 needsUpdate = !hasCurrentVersion
             } else {
                 needsUpdate = true
@@ -752,8 +754,8 @@ struct ConfigInstaller {
         guard let execPath = Bundle.main.executablePath else { return }
         let execDir = (execPath as NSString).deletingLastPathComponent
         let contentsDir = (execDir as NSString).deletingLastPathComponent
-        var srcPath = contentsDir + "/Helpers/codeisland-bridge"
-        if !fm.fileExists(atPath: srcPath) { srcPath = execDir + "/codeisland-bridge" }
+        var srcPath = contentsDir + "/Helpers/superisland-bridge"
+        if !fm.fileExists(atPath: srcPath) { srcPath = execDir + "/superisland-bridge" }
         guard fm.fileExists(atPath: srcPath) else { return }
 
         // Atomic replace: copy to temp file first, then rename (overwrites atomically)
@@ -839,8 +841,12 @@ struct ConfigInstaller {
             config = parsed
         }
         var plugins = config["plugin"] as? [String] ?? []
-        // Remove old vibe-island entries and any stale codeisland entries
-        plugins.removeAll { $0.contains("vibe-island") || $0.contains(HookId.current) }
+        // Remove old vibe-island entries plus stale SuperIsland/CodeIsland entries
+        plugins.removeAll {
+            $0.contains("vibe-island")
+                || $0.contains(HookId.current)
+                || HookId.legacy.contains(where: $0.contains)
+        }
         plugins.append(pluginRef)
         config["plugin"] = plugins
         if let data = try? JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys]) {
@@ -855,7 +861,9 @@ struct ConfigInstaller {
         guard let data = fm.contents(atPath: opencodeConfigPath),
               var config = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               var plugins = config["plugin"] as? [String] else { return }
-        plugins.removeAll { $0.contains(HookId.current) }
+        plugins.removeAll {
+            $0.contains(HookId.current) || HookId.legacy.contains(where: $0.contains)
+        }
         config["plugin"] = plugins.isEmpty ? nil : plugins
         if let data = try? JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys]) {
             fm.createFile(atPath: opencodeConfigPath, contents: data)

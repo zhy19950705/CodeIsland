@@ -38,6 +38,44 @@ struct UsageMonthlyStat: Codable, Hashable, Sendable {
     var costUSD: Double?
 }
 
+enum UsageHistoryRangePreset: String, Codable, CaseIterable, Identifiable, Sendable {
+    case thisWeek
+    case thisMonth
+    case recent30Days
+
+    var id: String { rawValue }
+
+    var sortOrder: Int {
+        switch self {
+        case .thisWeek: 0
+        case .thisMonth: 1
+        case .recent30Days: 2
+        }
+    }
+}
+
+struct UsageHistoryRow: Codable, Hashable, Sendable, Identifiable {
+    var dayStartUnix: TimeInterval
+    var model: String
+    var inputTokens: Int
+    var cachedInputTokens: Int
+    var outputTokens: Int
+    var totalTokens: Int
+    var costUSD: Double?
+
+    var id: String { "\(Int(dayStartUnix))::\(model)" }
+}
+
+struct UsageHistoryRangeSnapshot: Codable, Hashable, Sendable, Identifiable {
+    var preset: UsageHistoryRangePreset
+    var label: String?
+    var totalTokens: Int
+    var costUSD: Double?
+    var rows: [UsageHistoryRow]
+
+    var id: String { preset.rawValue }
+}
+
 struct UsageProviderSnapshot: Codable, Hashable, Sendable, Identifiable {
     var source: UsageProviderSource
     var primary: UsageWindowStat
@@ -45,6 +83,7 @@ struct UsageProviderSnapshot: Codable, Hashable, Sendable, Identifiable {
     var updatedAtUnix: TimeInterval?
     var summary: String?
     var monthly: UsageMonthlyStat?
+    var history: [UsageHistoryRangeSnapshot]?
 
     var id: String { source.rawValue }
 }
@@ -149,7 +188,7 @@ final class UsageMonitorLaunchAgentManager {
               fileManager.fileExists(atPath: executableURL.path) else {
             return UsageMonitorLaunchAgentSnapshot(
                 state: .unavailable,
-                detail: "CodeIsland executable is unavailable",
+                detail: "SuperIsland executable is unavailable",
                 plistPath: plistURL.path
             )
         }
@@ -230,25 +269,38 @@ final class UsageMonitorLaunchAgentManager {
         }
     }
 
-    func runNow() throws {
+    func runNow() async throws {
         guard let executableURL = AutomationCLI.executableURL(),
               fileManager.fileExists(atPath: executableURL.path) else {
             throw UsageMonitorLaunchAgentError.executableMissing
         }
 
+        let stderr = Pipe()
         let process = Process()
         process.executableURL = executableURL
         process.arguments = ["--monitor-usage", "--once"]
         process.standardOutput = Pipe()
-        process.standardError = Pipe()
-        try process.run()
-        process.waitUntilExit()
+        process.standardError = stderr
 
-        guard process.terminationStatus == 0 else {
-            let stderr = (process.standardError as? Pipe).flatMap {
-                String(data: $0.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
-            }?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            throw UsageMonitorLaunchAgentError.launchctlFailed(stderr.isEmpty ? "Usage refresh failed" : stderr)
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            process.terminationHandler = { process in
+                guard process.terminationStatus != 0 else {
+                    continuation.resume()
+                    return
+                }
+
+                let message = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                continuation.resume(throwing: UsageMonitorLaunchAgentError.launchctlFailed(
+                    message.isEmpty ? "Usage refresh failed" : message
+                ))
+            }
+
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(throwing: error)
+            }
         }
     }
 

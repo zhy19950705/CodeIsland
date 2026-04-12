@@ -48,7 +48,7 @@ struct MenuBarPopoverView: View {
                         .foregroundStyle(.white.opacity(0.9))
                 }
 
-                Text("CodeIsland")
+                Text("SuperIsland")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
 

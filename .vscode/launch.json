@@ -39,6 +39,26 @@
             "target": "CodeIsland",
             "configuration": "release",
             "preLaunchTask": "swift: Build Release CodeIsland"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:CodeIsland}",
+            "name": "Debug superisland-bridge",
+            "target": "superisland-bridge",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug superisland-bridge"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:CodeIsland}",
+            "name": "Release superisland-bridge",
+            "target": "superisland-bridge",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release superisland-bridge"
         }
     ]
 }

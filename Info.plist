@@ -4,24 +4,26 @@
 <dict>
 	<key>CFBundleExecutable</key>
 	<string>CodeIsland</string>
+	<key>CFBundleDisplayName</key>
+	<string>SuperIsland</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIconName</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.codeisland.app</string>
+	<string>com.superisland.app</string>
 	<key>CFBundleName</key>
-	<string>CodeIsland</string>
+	<string>SuperIsland</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>com.codeisland.app</string>
+			<string>com.superisland.app</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>codeisland</string>
+				<string>superisland</string>
 			</array>
 		</dict>
 	</array>
@@ -37,6 +39,6 @@
 		<true/>
 	</dict>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>CodeIsland needs to control terminal apps to jump to the correct window and tab when you click a session.</string>
+	<string>SuperIsland needs to control terminal apps to jump to the correct window and tab when you click a session.</string>
 </dict>
 </plist>

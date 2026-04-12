@@ -25,7 +25,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        ProcessInfo.processInfo.disableAutomaticTermination("CodeIsland must stay running")
+        ProcessInfo.processInfo.disableAutomaticTermination("SuperIsland must stay running")
         ProcessInfo.processInfo.disableSuddenTermination()
         // Pre-set app icon so Dock/menu bar use the packaged bundle icon.
         NSApp.applicationIconImage = SettingsWindowController.bundleAppIcon()
@@ -136,7 +136,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleIncomingURL(_ url: URL) {
-        guard url.scheme?.lowercased() == "codeisland" else { return }
+        guard url.scheme?.lowercased() == "superisland" else { return }
 
         let host = (url.host ?? "").lowercased()
         let pathComponents = url.pathComponents.filter { $0 != "/" }.map { $0.lowercased() }

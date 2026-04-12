@@ -14,11 +14,13 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$REPO_ROOT/.build"
 RELEASE_DIR="$BUILD_DIR/release"
 STAGING_DIR="$BUILD_DIR/dmg-staging"
-APP_DIR="$STAGING_DIR/CodeIsland.app"
+APP_NAME="SuperIsland"
+APP_EXECUTABLE="CodeIsland"
+APP_DIR="$STAGING_DIR/${APP_NAME}.app"
 CONTENTS_DIR="$APP_DIR/Contents"
-OUTPUT_DMG="$BUILD_DIR/CodeIsland.dmg"
+OUTPUT_DMG="$BUILD_DIR/${APP_NAME}.dmg"
 
-echo "==> Building CodeIsland ${VERSION} (universal)"
+echo "==> Building ${APP_NAME} ${VERSION} (universal)"
 
 # Build for both architectures
 cd "$REPO_ROOT"
@@ -37,10 +39,10 @@ mkdir -p "$CONTENTS_DIR/Helpers"
 mkdir -p "$CONTENTS_DIR/Resources"
 
 # Create universal binaries
-lipo -create "$ARM_DIR/CodeIsland" "$X86_DIR/CodeIsland" \
-     -output "$CONTENTS_DIR/MacOS/CodeIsland"
-lipo -create "$ARM_DIR/codeisland-bridge" "$X86_DIR/codeisland-bridge" \
-     -output "$CONTENTS_DIR/Helpers/codeisland-bridge"
+lipo -create "$ARM_DIR/$APP_EXECUTABLE" "$X86_DIR/$APP_EXECUTABLE" \
+     -output "$CONTENTS_DIR/MacOS/$APP_EXECUTABLE"
+lipo -create "$ARM_DIR/superisland-bridge" "$X86_DIR/superisland-bridge" \
+     -output "$CONTENTS_DIR/Helpers/superisland-bridge"
 
 # Write Info.plist (use the root Info.plist as base, update version)
 CURRENT_VER=$(defaults read "$REPO_ROOT/Info.plist" CFBundleShortVersionString)
@@ -77,8 +79,8 @@ echo "==> App bundle assembled at $APP_DIR"
 # Without Developer ID signing + notarization, macOS Gatekeeper will block
 # apps downloaded from the internet ("damaged" / "unidentified developer").
 #
-# Workaround for users: run  xattr -cr /Applications/CodeIsland.app
-# Or install via Homebrew:  brew install wxtsky/tap/codeisland
+# Workaround for users: run  xattr -cr /Applications/SuperIsland.app
+# Or install via Homebrew:  brew install zhy19950705/tap/superisland
 #
 # To enable signing, uncomment below and set your credentials:
 # ---------------------------------------------------------------------------
@@ -86,7 +88,7 @@ echo "==> App bundle assembled at $APP_DIR"
 # SIGNING_IDENTITY="Developer ID Application: Your Name (${TEAM_ID})"
 #
 # codesign --deep --force --options runtime \
-#     --entitlements "$REPO_ROOT/CodeIsland.entitlements" \
+#     --entitlements "$REPO_ROOT/SuperIsland.entitlements" \
 #     --sign "$SIGNING_IDENTITY" \
 #     "$APP_DIR"
 # ---------------------------------------------------------------------------
@@ -97,12 +99,12 @@ echo "==> Creating DMG"
 rm -f "$OUTPUT_DMG"
 
 create-dmg \
-    --volname "CodeIsland ${VERSION}" \
+    --volname "${APP_NAME} ${VERSION}" \
     --window-pos 200 120 \
     --window-size 600 400 \
     --icon-size 100 \
-    --icon "CodeIsland.app" 175 190 \
-    --hide-extension "CodeIsland.app" \
+    --icon "${APP_NAME}.app" 175 190 \
+    --hide-extension "${APP_NAME}.app" \
     --app-drop-link 425 190 \
     "$OUTPUT_DMG" \
     "$STAGING_DIR/"
@@ -110,7 +112,7 @@ create-dmg \
 # ---------------------------------------------------------------------------
 # Notarization (uncomment after Developer ID signing)
 # ---------------------------------------------------------------------------
-# BUNDLE_ID="com.codeisland.app"
+# BUNDLE_ID="com.superisland.app"
 # APPLE_ID="your@apple.id"
 # APP_PASSWORD="xxxx-xxxx-xxxx-xxxx"  # app-specific password
 #

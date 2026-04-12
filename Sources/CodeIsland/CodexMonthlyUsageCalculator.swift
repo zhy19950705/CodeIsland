@@ -44,6 +44,17 @@ private struct CodexModelPricing {
     var outputCostPerToken: Double
 }
 
+private struct CodexUsageRangeDescriptor {
+    var preset: UsageHistoryRangePreset
+    var startDate: Date
+    var endDateExclusive: Date
+}
+
+private struct CodexUsageRowKey: Hashable {
+    var dayStart: Date
+    var model: String
+}
+
 enum CodexMonthlyUsageCalculator {
     private static let pricingURL = URL(string: "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json")!
     private static let providerPrefixes = ["", "openai/", "azure/", "openrouter/openai/"]
@@ -59,99 +70,192 @@ enum CodexMonthlyUsageCalculator {
     }()
     private static let plainTimestampFormatter = ISO8601DateFormatter()
 
-    static func loadCurrentMonth(now: Date = Date(), fileManager: FileManager = .default) -> UsageMonthlyStat? {
+    static func loadCurrentMonth(
+        now: Date = Date(),
+        fileManager: FileManager = .default,
+        sessionsDirectory: URL? = nil,
+        pricingDataset: [String: [String: Any]]? = nil
+    ) -> UsageMonthlyStat? {
+        loadUsageHistory(
+            now: now,
+            fileManager: fileManager,
+            sessionsDirectory: sessionsDirectory,
+            pricingDataset: pricingDataset
+        ).monthly
+    }
+
+    static func loadUsageHistory(
+        now: Date = Date(),
+        fileManager: FileManager = .default,
+        sessionsDirectory: URL? = nil,
+        pricingDataset: [String: [String: Any]]? = nil
+    ) -> (monthly: UsageMonthlyStat?, history: [UsageHistoryRangeSnapshot]) {
         let calendar = Calendar.current
-        let startOfMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: now)) ?? now
-        guard let startOfNextMonth = calendar.date(byAdding: .month, value: 1, to: startOfMonth) else {
-            return nil
+        let ranges = usageRanges(now: now, calendar: calendar)
+        guard let earliestStartDate = ranges.map(\.startDate).min(),
+              let endDateExclusive = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)) else {
+            return (nil, [])
         }
 
-        var events: [CodexTokenUsageEvent] = []
-        let directories = candidateDirectories(now: now, fileManager: fileManager)
+        let baseSessionsDirectory = sessionsDirectoryURL(fileManager: fileManager, override: sessionsDirectory)
+        let directories = candidateDirectories(
+            startDate: earliestStartDate,
+            endDate: now,
+            sessionsDirectory: baseSessionsDirectory,
+            calendar: calendar
+        )
 
-        if let ripgrepEvents = loadEventsWithRipgrep(
+        let events = loadUsageEvents(
             directories: directories,
-            startOfMonth: startOfMonth,
-            startOfNextMonth: startOfNextMonth
-        ) {
-            events = ripgrepEvents
-        } else {
-            let currentMonthComponent = String(format: "%02d", calendar.component(.month, from: now))
-            for directory in directories {
-                guard fileManager.fileExists(atPath: directory.path),
-                      let enumerator = fileManager.enumerator(
-                        at: directory,
-                        includingPropertiesForKeys: [.contentModificationDateKey],
-                        options: [.skipsHiddenFiles]
-                      ) else {
-                    continue
-                }
+            startDate: earliestStartDate,
+            endDateExclusive: endDateExclusive,
+            fileManager: fileManager
+        )
+        guard !events.isEmpty else { return (nil, []) }
 
-                for case let fileURL as URL in enumerator where fileURL.pathExtension.lowercased() == "jsonl" {
-                    if directory.lastPathComponent != currentMonthComponent,
-                       let values = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]),
-                       let modifiedAt = values.contentModificationDate,
-                       modifiedAt < startOfMonth {
-                        continue
-                    }
-
-                    events.append(
-                        contentsOf: loadEvents(
-                            from: fileURL,
-                            startOfMonth: startOfMonth,
-                            startOfNextMonth: startOfNextMonth
-                        )
-                    )
-                }
-            }
+        let resolvedPricingDataset = pricingDataset ?? fetchPricingDataset()
+        let history = ranges.map {
+            historySnapshot(
+                for: $0,
+                events: events,
+                pricingDataset: resolvedPricingDataset,
+                calendar: calendar
+            )
         }
 
-        guard !events.isEmpty else { return nil }
-
-        var totalTokens = 0
-        var models: [String: CodexModelUsageAccumulator] = [:]
-        for event in events {
-            totalTokens += event.delta.totalTokens
-            var usage = models[event.model, default: CodexModelUsageAccumulator()]
-            usage.add(event.delta)
-            models[event.model] = usage
-        }
-
-        let pricingDataset = fetchPricingDataset()
-        var totalCostUSD = 0.0
-        var hasCost = false
-        for (model, usage) in models {
-            guard let pricing = resolvePricing(for: model, dataset: pricingDataset) else { continue }
-            hasCost = true
-            totalCostUSD += calculateCostUSD(usage: usage, pricing: pricing)
-        }
-
-        let formatter = DateFormatter()
-        formatter.locale = Locale.current
-        formatter.setLocalizedDateFormatFromTemplate("yyyyMM")
-
-        return UsageMonthlyStat(
-            label: formatter.string(from: now),
-            totalTokens: totalTokens,
-            costUSD: hasCost ? totalCostUSD : nil
+        return (
+            monthly: monthlySummary(from: history.first(where: { $0.preset == .recent30Days }), now: now),
+            history: history
         )
     }
 
-    private static func sessionsDirectoryURL(fileManager: FileManager) -> URL {
-        fileManager.homeDirectoryForCurrentUser
+    private static func usageRanges(now: Date, calendar: Calendar) -> [CodexUsageRangeDescriptor] {
+        let startOfToday = calendar.startOfDay(for: now)
+        let startOfWeek = calendar.dateInterval(of: .weekOfYear, for: now)?.start ?? startOfToday
+        let startOfMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: now)) ?? startOfToday
+        let recent30DayStart = calendar.date(byAdding: .day, value: -29, to: startOfToday) ?? startOfToday
+        let endDateExclusive = calendar.date(byAdding: .day, value: 1, to: startOfToday) ?? now
+
+        return [
+            CodexUsageRangeDescriptor(preset: .thisWeek, startDate: startOfWeek, endDateExclusive: endDateExclusive),
+            CodexUsageRangeDescriptor(preset: .thisMonth, startDate: startOfMonth, endDateExclusive: endDateExclusive),
+            CodexUsageRangeDescriptor(preset: .recent30Days, startDate: recent30DayStart, endDateExclusive: endDateExclusive),
+        ]
+    }
+
+    private static func monthlySummary(from snapshot: UsageHistoryRangeSnapshot?, now: Date) -> UsageMonthlyStat? {
+        guard let snapshot, snapshot.totalTokens > 0 else { return nil }
+        return UsageMonthlyStat(
+            label: recent30DayLabel(endingAt: now),
+            totalTokens: snapshot.totalTokens,
+            costUSD: snapshot.costUSD
+        )
+    }
+
+    private static func recent30DayLabel(endingAt date: Date) -> String {
+        let calendar = Calendar.current
+        let startDate = calendar.date(byAdding: .day, value: -29, to: calendar.startOfDay(for: date)) ?? date
+        let formatter = DateFormatter()
+        formatter.locale = Locale.current
+        formatter.dateStyle = .short
+        formatter.timeStyle = .none
+        return "\(formatter.string(from: startDate)) - \(formatter.string(from: date))"
+    }
+
+    private static func rangeLabel(
+        startDate: Date,
+        endDateExclusive: Date
+    ) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale.current
+        formatter.dateStyle = .short
+        formatter.timeStyle = .none
+        let inclusiveEnd = endDateExclusive.addingTimeInterval(-1)
+        return "\(formatter.string(from: startDate)) - \(formatter.string(from: inclusiveEnd))"
+    }
+
+    private static func historySnapshot(
+        for descriptor: CodexUsageRangeDescriptor,
+        events: [CodexTokenUsageEvent],
+        pricingDataset: [String: [String: Any]],
+        calendar: Calendar
+    ) -> UsageHistoryRangeSnapshot {
+        var usageByRow: [CodexUsageRowKey: CodexModelUsageAccumulator] = [:]
+
+        for event in events where event.timestamp >= descriptor.startDate && event.timestamp < descriptor.endDateExclusive {
+            let key = CodexUsageRowKey(
+                dayStart: calendar.startOfDay(for: event.timestamp),
+                model: event.model
+            )
+            var usage = usageByRow[key, default: CodexModelUsageAccumulator()]
+            usage.add(event.delta)
+            usageByRow[key] = usage
+        }
+
+        var totalCostUSD = 0.0
+        var hasCost = false
+        var rows: [UsageHistoryRow] = []
+
+        for (key, usage) in usageByRow {
+            let costUSD = resolvePricing(for: key.model, dataset: pricingDataset).map {
+                let cost = calculateCostUSD(usage: usage, pricing: $0)
+                hasCost = true
+                totalCostUSD += cost
+                return cost
+            }
+
+            rows.append(
+                UsageHistoryRow(
+                    dayStartUnix: key.dayStart.timeIntervalSince1970,
+                    model: key.model,
+                    inputTokens: usage.inputTokens,
+                    cachedInputTokens: usage.cachedInputTokens,
+                    outputTokens: usage.outputTokens,
+                    totalTokens: usage.totalTokens,
+                    costUSD: costUSD
+                )
+            )
+        }
+
+        rows.sort {
+            if $0.dayStartUnix != $1.dayStartUnix {
+                return $0.dayStartUnix > $1.dayStartUnix
+            }
+            if $0.totalTokens != $1.totalTokens {
+                return $0.totalTokens > $1.totalTokens
+            }
+            return $0.model.localizedCaseInsensitiveCompare($1.model) == .orderedAscending
+        }
+
+        return UsageHistoryRangeSnapshot(
+            preset: descriptor.preset,
+            label: rangeLabel(startDate: descriptor.startDate, endDateExclusive: descriptor.endDateExclusive),
+            totalTokens: rows.reduce(0) { $0 + $1.totalTokens },
+            costUSD: hasCost ? totalCostUSD : nil,
+            rows: rows
+        )
+    }
+
+    private static func sessionsDirectoryURL(fileManager: FileManager, override: URL?) -> URL {
+        if let override { return override }
+        return fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent(".codex", isDirectory: true)
             .appendingPathComponent("sessions", isDirectory: true)
     }
 
-    private static func candidateDirectories(now: Date, fileManager: FileManager) -> [URL] {
-        let calendar = Calendar.current
-        let sessionsDirectory = sessionsDirectoryURL(fileManager: fileManager)
-        let currentComponents = calendar.dateComponents([.year, .month], from: now)
-        let previousDate = calendar.date(byAdding: .month, value: -1, to: now)
-        let previousComponents = previousDate.map { calendar.dateComponents([.year, .month], from: $0) }
+    private static func candidateDirectories(
+        startDate: Date,
+        endDate: Date,
+        sessionsDirectory: URL,
+        calendar: Calendar
+    ) -> [URL] {
+        let startMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: startDate)) ?? startDate
+        let endMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: endDate)) ?? endDate
 
         var directories: [URL] = []
-        for components in [currentComponents, previousComponents].compactMap({ $0 }) {
+        var cursor = startMonth
+        while cursor <= endMonth {
+            let components = calendar.dateComponents([.year, .month], from: cursor)
             let year = String(format: "%04d", components.year ?? 0)
             let month = String(format: "%02d", components.month ?? 0)
             directories.append(
@@ -159,14 +263,61 @@ enum CodexMonthlyUsageCalculator {
                     .appendingPathComponent(year, isDirectory: true)
                     .appendingPathComponent(month, isDirectory: true)
             )
+            guard let nextMonth = calendar.date(byAdding: .month, value: 1, to: cursor) else { break }
+            cursor = nextMonth
         }
         return directories
     }
 
+    private static func loadUsageEvents(
+        directories: [URL],
+        startDate: Date,
+        endDateExclusive: Date,
+        fileManager: FileManager
+    ) -> [CodexTokenUsageEvent] {
+        if let ripgrepEvents = loadEventsWithRipgrep(
+            directories: directories,
+            startDate: startDate,
+            endDateExclusive: endDateExclusive
+        ) {
+            return ripgrepEvents
+        }
+
+        var events: [CodexTokenUsageEvent] = []
+        for directory in directories {
+            guard fileManager.fileExists(atPath: directory.path),
+                  let enumerator = fileManager.enumerator(
+                    at: directory,
+                    includingPropertiesForKeys: [.contentModificationDateKey],
+                    options: [.skipsHiddenFiles]
+                  ) else {
+                continue
+            }
+
+            for case let fileURL as URL in enumerator where fileURL.pathExtension.lowercased() == "jsonl" {
+                if let values = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]),
+                   let modifiedAt = values.contentModificationDate,
+                   modifiedAt < startDate {
+                    continue
+                }
+
+                events.append(
+                    contentsOf: loadEvents(
+                        from: fileURL,
+                        startDate: startDate,
+                        endDateExclusive: endDateExclusive
+                    )
+                )
+            }
+        }
+
+        return events
+    }
+
     private static func loadEventsWithRipgrep(
         directories: [URL],
-        startOfMonth: Date,
-        startOfNextMonth: Date
+        startDate: Date,
+        endDateExclusive: Date
     ) -> [CodexTokenUsageEvent]? {
         let existingDirectories = directories.filter { FileManager.default.fileExists(atPath: $0.path) }
         guard !existingDirectories.isEmpty else { return [] }
@@ -220,15 +371,19 @@ enum CodexMonthlyUsageCalculator {
                 contentsOf: loadEvents(
                     fromMatchedLines: sortedMatches.map(\.json),
                     fileURL: URL(fileURLWithPath: filePath),
-                    startOfMonth: startOfMonth,
-                    startOfNextMonth: startOfNextMonth
+                    startDate: startDate,
+                    endDateExclusive: endDateExclusive
                 )
             )
         }
         return events
     }
 
-    private static func loadEvents(from fileURL: URL, startOfMonth: Date, startOfNextMonth: Date) -> [CodexTokenUsageEvent] {
+    private static func loadEvents(
+        from fileURL: URL,
+        startDate: Date,
+        endDateExclusive: Date
+    ) -> [CodexTokenUsageEvent] {
         guard let content = try? String(contentsOf: fileURL, encoding: .utf8) else {
             return []
         }
@@ -236,16 +391,16 @@ enum CodexMonthlyUsageCalculator {
         return loadEvents(
             fromMatchedLines: content.split(whereSeparator: \.isNewline).map(String.init),
             fileURL: fileURL,
-            startOfMonth: startOfMonth,
-            startOfNextMonth: startOfNextMonth
+            startDate: startDate,
+            endDateExclusive: endDateExclusive
         )
     }
 
     private static func loadEvents(
         fromMatchedLines lines: [String],
         fileURL: URL,
-        startOfMonth: Date,
-        startOfNextMonth: Date
+        startDate: Date,
+        endDateExclusive: Date
     ) -> [CodexTokenUsageEvent] {
         _ = fileURL
 
@@ -275,7 +430,7 @@ enum CodexMonthlyUsageCalculator {
                 continue
             }
 
-            guard timestamp >= startOfMonth && timestamp < startOfNextMonth else {
+            guard timestamp >= startDate && timestamp < endDateExclusive else {
                 continue
             }
 

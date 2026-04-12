@@ -419,7 +419,7 @@ private struct CodexUsageAPIClient {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(chatgptAccountId, forHTTPHeaderField: "ChatGPT-Account-Id")
         request.setValue(
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36 CodeIsland/1.0",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36 SuperIsland/1.0",
             forHTTPHeaderField: "User-Agent"
         )
 
@@ -564,7 +564,7 @@ final class CodexAutoSwitchLaunchAgentManager {
               fileManager.fileExists(atPath: executableURL.path) else {
             return CodexAutoSwitchLaunchAgentSnapshot(
                 state: .unavailable,
-                detail: "CodeIsland executable is unavailable",
+                detail: "SuperIsland executable is unavailable",
                 plistPath: plistURL.path
             )
         }
@@ -634,25 +634,38 @@ final class CodexAutoSwitchLaunchAgentManager {
         }
     }
 
-    func runNow() throws {
+    func runNow() async throws {
         guard let executableURL = AutomationCLI.executableURL(),
               fileManager.fileExists(atPath: executableURL.path) else {
             throw CodexAutoSwitchLaunchAgentError.executableMissing
         }
 
+        let stderr = Pipe()
         let process = Process()
         process.executableURL = executableURL
         process.arguments = ["--codex-auth", "daemon", "--once"]
         process.standardOutput = Pipe()
-        process.standardError = Pipe()
-        try process.run()
-        process.waitUntilExit()
+        process.standardError = stderr
 
-        guard process.terminationStatus == 0 else {
-            let stderr = (process.standardError as? Pipe).flatMap {
-                String(data: $0.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
-            }?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            throw CodexAutoSwitchLaunchAgentError.launchctlFailed(stderr.isEmpty ? "Auto-switch check failed" : stderr)
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            process.terminationHandler = { process in
+                guard process.terminationStatus != 0 else {
+                    continuation.resume()
+                    return
+                }
+
+                let message = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                continuation.resume(throwing: CodexAutoSwitchLaunchAgentError.launchctlFailed(
+                    message.isEmpty ? "Auto-switch check failed" : message
+                ))
+            }
+
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(throwing: error)
+            }
         }
     }
 

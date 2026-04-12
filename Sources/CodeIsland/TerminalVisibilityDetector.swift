@@ -139,6 +139,21 @@ struct TerminalVisibilityDetector {
     /// Check if Ghostty's front window matches this session's CWD.
     /// Uses System Events to read the front window title (Ghostty's native scripting
     /// doesn't expose a "focused terminal" property).
+    ///
+    /// ⚠️ TCC Warning: This method uses AppleScript with "System Events" which requires
+    /// Accessibility permission. On macOS 15+, frequent calls to System Events may
+    /// indirectly trigger "Screen Recording" permission prompts for the target app
+    /// (the app whose window is being queried). This is because window title queries
+    /// are bundled with screen capture APIs in the TCC subsystem.
+    ///
+    /// To mitigate this, the method is only called from `isSessionTabVisible` which
+    /// runs on a background thread and only when Ghostty is actually the frontmost app.
+    /// Avoid calling this method in a tight loop or polling timer.
+    ///
+    /// Alternative approaches considered:
+    /// - Ghostty CLI doesn't expose focused window/pane info directly
+    /// - Reading via CLI (`lsof` on TTY) is unreliable for detecting active tab
+    /// - Accessibility API (AXUIElement) requires the same permission as AppleScript
     private static func isGhosttyTabActive(_ session: SessionSnapshot) -> Bool {
         guard let cwd = session.cwd, !cwd.isEmpty else { return true }
         let dirName = escapeAppleScript((cwd as NSString).lastPathComponent)

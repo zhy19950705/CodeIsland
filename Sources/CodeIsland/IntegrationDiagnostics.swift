@@ -140,6 +140,7 @@ enum CLIIntegrationID: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .opencode:
             return [
+                "~/.config/opencode/plugins/superisland.js",
                 "~/.config/opencode/plugins/codeisland.js",
                 "~/.config/opencode/config.json",
             ]
@@ -172,7 +173,7 @@ enum CLIIntegrationID: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    var installMarker: String { "codeisland" }
+    var installMarkers: [String] { ["superisland", "codeisland"] }
 }
 
 enum CLIIntegrationState: Sendable {
@@ -219,8 +220,8 @@ final class CLIIntegrationManager {
             .map(expandHome)
             .first(where: { fileManager.fileExists(atPath: $0) })
 
-        let hasMarker = existingConfigPath.flatMap(readText).map {
-            $0.localizedCaseInsensitiveContains(integration.installMarker)
+        let hasMarker = existingConfigPath.flatMap(readText).map { text in
+            integration.installMarkers.contains { text.localizedCaseInsensitiveContains($0) }
         } ?? false
 
         let cliDetected = isCLIAvailable(for: integration)

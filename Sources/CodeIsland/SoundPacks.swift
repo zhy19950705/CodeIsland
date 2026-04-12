@@ -143,7 +143,7 @@ enum SoundPackCatalog {
         return SoundPack(
             id: defaultPackID,
             title: "8-bit Classic",
-            subtitle: "Original CodeIsland notification sounds",
+            subtitle: "Original SuperIsland notification sounds",
             author: nil,
             accentHex: "#7BC6FF",
             systemName: "waveform.path",

@@ -1,5 +1,5 @@
 // ============================================================
-// codeisland-bridge — Native Claude Code hook event forwarder
+// superisland-bridge — Native Claude Code hook event forwarder
 // ============================================================
 // Replaces shell script + nc with:
 // • Proper JSON parsing (no string manipulation)
@@ -157,7 +157,7 @@ func debugLog(_ message: String) {
     guard ProcessInfo.processInfo.environment["CODEISLAND_DEBUG"] != nil else { return }
     let ts = ISO8601DateFormatter().string(from: Date())
     let line = "[\(ts)] \(message)\n"
-    let path = "/tmp/codeisland-bridge.log"
+    let path = "/tmp/superisland-bridge.log"
     if let handle = FileHandle(forWritingAtPath: path) {
         handle.seekToEndOfFile()
         handle.write(Data(line.utf8))

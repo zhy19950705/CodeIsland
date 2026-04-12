@@ -48,7 +48,8 @@ final class NotchPanelViewUsageTests: XCTestCase {
             ),
             updatedAtUnix: nil,
             summary: nil,
-            monthly: nil
+            monthly: nil,
+            history: nil
         )
     }
 }

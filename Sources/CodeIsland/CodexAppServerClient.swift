@@ -217,8 +217,8 @@ actor CodexAppServerClient {
                 method: "initialize",
                 params: [
                     "clientInfo": [
-                        "name": "CodeIsland",
-                        "title": "CodeIsland",
+                        "name": "SuperIsland",
+                        "title": "SuperIsland",
                         "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? AppVersion.fallback,
                     ],
                     "capabilities": [

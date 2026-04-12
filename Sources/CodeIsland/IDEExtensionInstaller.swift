@@ -38,8 +38,9 @@ enum IDEExtensionHost: String, CaseIterable, Identifiable, Sendable {
 }
 
 struct IDEExtensionInstaller {
-    private static let publisher = "codeisland"
+    private static let publisher = "superisland"
     private static let name = "session-bridge"
+    private static let legacyIdentifierPrefix = "codeisland.\(name)-"
 
     private static var version: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? AppVersion.fallback
@@ -81,14 +82,14 @@ struct IDEExtensionInstaller {
     }
 
     private static func removeStaleExtensions(in rootURL: URL) {
-        let prefix = "\(identifier)-"
+        let prefixes = ["\(identifier)-", legacyIdentifierPrefix]
         guard let items = try? FileManager.default.contentsOfDirectory(
             at: rootURL,
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         ) else { return }
 
-        for item in items where item.lastPathComponent.hasPrefix(prefix) {
+        for item in items where prefixes.contains(where: { item.lastPathComponent.hasPrefix($0) }) {
             try? FileManager.default.removeItem(at: item)
         }
     }
@@ -97,8 +98,8 @@ struct IDEExtensionInstaller {
         """
         {
           "name": "\(name)",
-          "displayName": "CodeIsland Session Bridge",
-          "description": "Open CodeIsland settings and focus the active session for the current workspace.",
+          "displayName": "SuperIsland Session Bridge",
+          "description": "Open SuperIsland settings and focus the active session for the current workspace.",
           "version": "\(version)",
           "publisher": "\(publisher)",
           "engines": {
@@ -114,12 +115,12 @@ struct IDEExtensionInstaller {
           "contributes": {
             "commands": [
               {
-                "command": "codeisland.openSettings",
-                "title": "CodeIsland: Open Settings"
+                "command": "superisland.openSettings",
+                "title": "SuperIsland: Open Settings"
               },
               {
-                "command": "codeisland.focusWorkspaceSession",
-                "title": "CodeIsland: Focus Workspace Session"
+                "command": "superisland.focusWorkspaceSession",
+                "title": "SuperIsland: Focus Workspace Session"
               }
             ]
           }
@@ -131,33 +132,33 @@ struct IDEExtensionInstaller {
         """
         const vscode = require('vscode');
 
-        function codeIslandURL(path, query) {
+        function superIslandURL(path, query) {
           const search = new URLSearchParams(query);
           const suffix = search.toString() ? `?${search.toString()}` : '';
-          return vscode.Uri.parse(`codeisland://${path}${suffix}`);
+          return vscode.Uri.parse(`superisland://${path}${suffix}`);
         }
 
         async function focusWorkspaceSession() {
           const folder = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0];
           if (!folder) {
-            vscode.window.showInformationMessage('CodeIsland: no open workspace folder.');
+            vscode.window.showInformationMessage('SuperIsland: no open workspace folder.');
             return;
           }
 
-          await vscode.env.openExternal(codeIslandURL('session', {
+          await vscode.env.openExternal(superIslandURL('session', {
             cwd: folder.uri.fsPath,
             source: '\(host.sourceTag)'
           }));
         }
 
         async function openSettings() {
-          await vscode.env.openExternal(codeIslandURL('settings', {}));
+          await vscode.env.openExternal(superIslandURL('settings', {}));
         }
 
         function activate(context) {
           context.subscriptions.push(
-            vscode.commands.registerCommand('codeisland.openSettings', openSettings),
-            vscode.commands.registerCommand('codeisland.focusWorkspaceSession', focusWorkspaceSession)
+            vscode.commands.registerCommand('superisland.openSettings', openSettings),
+            vscode.commands.registerCommand('superisland.focusWorkspaceSession', focusWorkspaceSession)
           );
         }
 
@@ -169,13 +170,13 @@ struct IDEExtensionInstaller {
 
     private static func readme(for host: IDEExtensionHost) -> String {
         """
-        # CodeIsland Session Bridge
+        # SuperIsland Session Bridge
 
         Generated helper extension for \(host.title).
 
         Commands:
-        - `CodeIsland: Open Settings`
-        - `CodeIsland: Focus Workspace Session`
+        - `SuperIsland: Open Settings`
+        - `SuperIsland: Focus Workspace Session`
         """
     }
 }

@@ -243,13 +243,13 @@ struct NotchPanelView: View {
                 if hovering {
                     // Delay expansion to avoid accidental triggers
                     hoverTimer?.invalidate()
-                    hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { _ in
+                    hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak appState] _ in
                         Task { @MainActor in
                             withAnimation(NotchAnimation.open) {
-                                appState.surface = .sessionList
-                                appState.cancelCompletionQueue()
-                                if appState.activeSessionId == nil {
-                                    appState.activeSessionId = appState.sessions.keys.sorted().first
+                                appState?.surface = .sessionList
+                                appState?.cancelCompletionQueue()
+                                if appState?.activeSessionId == nil {
+                                    appState?.activeSessionId = appState?.sessions.keys.sorted().first
                                 }
                             }
                         }
@@ -257,10 +257,10 @@ struct NotchPanelView: View {
                 } else {
                     // Collapse with brief delay to prevent flicker on accidental mouse-out
                     hoverTimer?.invalidate()
-                    hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) { _ in
+                    hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) { [weak appState] _ in
                         Task { @MainActor in
                             withAnimation(NotchAnimation.close) {
-                                appState.surface = .collapsed
+                                appState?.surface = .collapsed
                             }
                         }
                     }
@@ -487,7 +487,7 @@ struct CompactUsageBadge: View {
             lines.append(summary)
         }
         if let monthly = provider.monthly {
-            var monthlyLine = "\(l10n["usage_this_month"]) \(monthly.label): \(compactTokenSummary(monthly.totalTokens))"
+            var monthlyLine = "\(l10n["usage_recent_30_days"]) \(monthly.label): \(compactTokenSummary(monthly.totalTokens))"
             if let costUSD = monthly.costUSD {
                 monthlyLine += " · \(String(format: "$%.2f", costUSD))"
             }

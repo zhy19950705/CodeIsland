@@ -22,7 +22,7 @@ enum CodexAccountManagerError: LocalizedError {
         case .missingCodexCLI:
             return "Codex CLI was not found on this Mac"
         case .missingCodeIslandExecutable:
-            return "CodeIsland executable was not found on this Mac"
+            return "SuperIsland executable was not found on this Mac"
         case let .codexLoginFailed(status):
             return "codex login exited with status \(status)"
         case let .terminalLaunchFailed(message):

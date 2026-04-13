@@ -1,0 +1,2969 @@
+import SwiftUI
+import SuperIslandCore
+
+struct NotchPanelView: View {
+    var appState: AppState
+    let hasNotch: Bool
+    let notchHeight: CGFloat
+    let notchW: CGFloat
+    let screenWidth: CGFloat
+
+    @AppStorage(SettingsKey.contentFontSize) private var contentFontSize = SettingsDefaults.contentFontSize
+    @AppStorage(SettingsKey.showAgentDetails) private var showAgentDetails = SettingsDefaults.showAgentDetails
+    @AppStorage(SettingsKey.smartSuppress) private var smartSuppress = SettingsDefaults.smartSuppress
+    @AppStorage(SettingsKey.hideWhenNoSession) private var hideWhenNoSession = SettingsDefaults.hideWhenNoSession
+    @AppStorage(SettingsKey.showToolStatus) private var showToolStatus = SettingsDefaults.showToolStatus
+
+    /// Delayed hover: prevents accidental expansion when mouse passes through
+    @State private var hoverTimer: Timer?
+    @State private var idleHovered = false
+    /// Curtain animation for tool status toggle
+    @State private var curtainOffset: CGFloat = 0
+    @State private var curtainOpacity: Double = 1
+    @State private var displayedToolStatus: Bool = SettingsDefaults.showToolStatus
+
+    private var isActive: Bool { !appState.sessions.isEmpty }
+    /// First launch / no-session state should still render a visible marker so the app
+    /// doesn't disappear completely behind the physical notch.
+    private var showIdleIndicator: Bool {
+        !isActive && !hideWhenNoSession
+    }
+    /// Whether the bar content should be visible (respects hideWhenNoSession)
+    private var showBar: Bool {
+        isActive && !(hideWhenNoSession && appState.activeSessionCount == 0)
+    }
+    private var shouldShowExpanded: Bool {
+        showBar && appState.surface.isExpanded
+    }
+    private var compactUsageProvider: UsageProviderSnapshot? {
+        Self.compactUsageProvider(
+            from: appState.usageSnapshot,
+            sessions: appState.sessions,
+            rotatingSessionId: appState.rotatingSessionId,
+            activeSessionId: appState.activeSessionId,
+            primarySource: appState.primarySource
+        )
+    }
+    private var showCompactUsageBadge: Bool {
+        !shouldShowExpanded && compactUsageProvider != nil
+    }
+
+    /// Mascot size — fits within the menu bar height
+    private var mascotSize: CGFloat { min(27, notchHeight - 6) }
+
+    /// Minimum wing width needed to display compact bar content
+    private var compactWingWidth: CGFloat { mascotSize + 14 }
+
+    /// Total panel width — adapts based on state and screen geometry
+    private var panelWidth: CGFloat {
+        let maxWidth = min(620, screenWidth - 40)
+        if showIdleIndicator { return idleHovered ? notchW + compactWingWidth * 2 + 80 : notchW + compactWingWidth * 2 }
+        if !isActive { return hasNotch ? notchW - 20 : notchW }
+        if shouldShowExpanded { return min(max(notchW + 200, 580), maxWidth) }
+        let wing = compactWingWidth
+        let extra: CGFloat = appState.status == .idle ? 0 : 20
+        // Reserve space for tool status — proportional to screen width
+        let toolExtra: CGFloat = displayedToolStatus ? (hasNotch ? screenWidth * 0.03 : screenWidth * 0.04) : 0
+        let usageExtra: CGFloat = showCompactUsageBadge ? (hasNotch ? 76 : 90) : 0
+        return notchW + wing * 2 + extra + toolExtra + usageExtra
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 0) {
+                if showBar {
+                    // Active: compact bar — wider version when expanded
+                    HStack(spacing: 0) {
+                        CompactLeftWing(appState: appState, expanded: shouldShowExpanded, mascotSize: mascotSize, hasNotch: hasNotch, showToolStatus: showToolStatus)
+                        if hasNotch && !shouldShowExpanded {
+                            Spacer(minLength: notchW)
+                        } else if !shouldShowExpanded && showToolStatus {
+                            CompactToolStatus(appState: appState)
+                            Spacer(minLength: 0)
+                        } else {
+                            Spacer(minLength: 0)
+                        }
+                        CompactRightWing(appState: appState, expanded: shouldShowExpanded, hasNotch: hasNotch)
+                    }
+                    .frame(height: notchHeight)
+                } else if showIdleIndicator {
+                    IdleIndicatorBar(
+                        mascotSize: mascotSize,
+                        compactWingWidth: compactWingWidth,
+                        notchW: notchW,
+                        notchHeight: notchHeight,
+                        hasNotch: hasNotch,
+                        hovered: idleHovered
+                    )
+                } else {
+                    // Idle: just the notch shell
+                    Spacer()
+                        .frame(height: notchHeight)
+                }
+
+                // Below-notch expanded content
+                if shouldShowExpanded {
+                    Line()
+                        .stroke(.white.opacity(0.15), style: StrokeStyle(lineWidth: 0.5, dash: [4, 3]))
+                        .frame(height: 0.5)
+                        .padding(.horizontal, 12)
+
+                    switch appState.surface {
+                    case .approvalCard:
+                        if let pending = appState.pendingPermission {
+                            ApprovalBar(
+                                tool: pending.event.toolName ?? "Unknown",
+                                toolInput: pending.event.toolInput,
+                                queuePosition: 1,
+                                queueTotal: appState.permissionQueue.count,
+                                onAllow: { appState.approvePermission(always: false) },
+                                onAlwaysAllow: { appState.approvePermission(always: true) },
+                                onDeny: { appState.denyPermission() }
+                            )
+                            .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
+                        } else if let preview = appState.previewApprovalPayload {
+                            ApprovalBar(
+                                tool: preview.tool,
+                                toolInput: preview.toolInput,
+                                queuePosition: 1,
+                                queueTotal: 1,
+                                onAllow: { },
+                                onAlwaysAllow: { },
+                                onDeny: { }
+                            )
+                            .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
+                        }
+                    case .questionCard(let sid):
+                        let session = appState.sessions[sid]
+                        if let q = appState.pendingQuestion {
+                            QuestionBar(
+                                question: q.question.question,
+                                options: q.question.options,
+                                descriptions: q.question.descriptions,
+                                sessionSource: session?.source,
+                                sessionContext: session?.cwd,
+                                queuePosition: 1,
+                                queueTotal: appState.questionQueue.count,
+                                onAnswer: { appState.answerQuestion($0) },
+                                onSkip: { appState.skipQuestion() }
+                            )
+                            .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
+                        } else if let preview = appState.previewQuestionPayload {
+                            QuestionBar(
+                                question: preview.question,
+                                options: preview.options,
+                                descriptions: preview.descriptions,
+                                sessionSource: session?.source,
+                                sessionContext: session?.cwd,
+                                queuePosition: 1,
+                                queueTotal: 1,
+                                onAnswer: { _ in },
+                                onSkip: { }
+                            )
+                            .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
+                        }
+                    case .completionCard:
+                        SessionListView(appState: appState, onlySessionId: appState.justCompletedSessionId)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    case .sessionList:
+                        SessionListView(appState: appState, onlySessionId: nil)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    case .collapsed:
+                        EmptyView()
+                    }
+                }
+            }
+            .frame(width: panelWidth)
+            .clipped()
+            .background(
+                NotchPanelShape(
+                    topExtension: shouldShowExpanded ? 14 : 3,
+                    bottomRadius: shouldShowExpanded ? 24 : 12,
+                    minHeight: notchHeight
+                )
+                .fill(.black)
+            )
+            .offset(y: curtainOffset)
+            .opacity(curtainOpacity)
+            .onChange(of: showToolStatus) { _, newValue in
+                // Phase 1: entire bar slides up and fades out
+                withAnimation(.easeIn(duration: 0.2)) {
+                    curtainOffset = -notchHeight
+                    curtainOpacity = 0
+                }
+                // Phase 2: switch width while hidden
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    displayedToolStatus = newValue
+                }
+                // Phase 3: entire bar slides back down
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    withAnimation(.easeOut(duration: 0.25)) {
+                        curtainOffset = 0
+                        curtainOpacity = 1
+                    }
+                }
+            }
+            .onAppear { displayedToolStatus = showToolStatus }
+            .contentShape(Rectangle())
+            .onContinuousHover(coordinateSpace: .local) { phase in
+                switch phase {
+                case .active(let point):
+                    handleActiveHover(at: point)
+                case .ended:
+                    handleHoverChange(false)
+                }
+            }
+
+            Spacer()
+                .allowsHitTesting(false)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .animation(NotchAnimation.open, value: appState.surface)
+    }
+
+    private func handleActiveHover(at point: CGPoint) {
+        if shouldIgnoreCollapsedNotchHover(localPoint: point) {
+            cancelHoverTimer()
+            return
+        }
+        handleHoverChange(true)
+    }
+
+    private func handleHoverChange(_ hovering: Bool) {
+        if !hovering, shouldIgnoreCollapsedNotchHover(localPoint: nil) {
+            cancelHoverTimer()
+            return
+        }
+
+        // Idle indicator hover
+        if showIdleIndicator {
+            withAnimation(NotchAnimation.micro) { idleHovered = hovering }
+            return
+        }
+        switch appState.surface {
+        case .approvalCard, .questionCard: return
+        case .completionCard:
+            // Completion card: mark entered on hover-in, block collapse until entered
+            if hovering {
+                appState.completionHasBeenEntered = true
+            } else if appState.completionHasBeenEntered {
+                // Mouse entered then left — allow collapse
+                cancelHoverTimer()
+                withAnimation(NotchAnimation.close) {
+                    appState.surface = .collapsed
+                    appState.cancelCompletionQueue()
+                }
+            }
+            return
+        default: break
+        }
+        // Respect collapseOnMouseLeave setting
+        if !hovering && !SettingsManager.shared.collapseOnMouseLeave { return }
+        // Smart suppress: don't auto-expand when active session's terminal is foreground
+        if hovering && smartSuppress {
+            if let delegate = NSApp.delegate as? AppDelegate,
+               let pc = delegate.panelController,
+               pc.isActiveTerminalForeground() {
+                return
+            }
+        }
+
+        if hovering {
+            // Delay expansion to avoid accidental triggers
+            cancelHoverTimer()
+            hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak appState] _ in
+                Task { @MainActor in
+                    withAnimation(NotchAnimation.open) {
+                        appState?.surface = .sessionList
+                        appState?.cancelCompletionQueue()
+                        if appState?.activeSessionId == nil {
+                            appState?.activeSessionId = appState?.sessions.keys.sorted().first
+                        }
+                    }
+                }
+            }
+        } else {
+            // Collapse with brief delay to prevent flicker on accidental mouse-out
+            cancelHoverTimer()
+            hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) { [weak appState] _ in
+                Task { @MainActor in
+                    withAnimation(NotchAnimation.close) {
+                        appState?.surface = .collapsed
+                    }
+                }
+            }
+        }
+    }
+
+    private func cancelHoverTimer() {
+        hoverTimer?.invalidate()
+        hoverTimer = nil
+    }
+
+    private func shouldIgnoreCollapsedNotchHover(localPoint: CGPoint?) -> Bool {
+        let ignoresHover = !shouldShowExpanded
+        if let localPoint,
+           Self.isInCollapsedNotchDeadZone(
+               point: localPoint,
+               panelWidth: panelWidth,
+               notchWidth: notchW,
+               hasNotch: hasNotch,
+               ignoresHover: ignoresHover
+           ) {
+            return true
+        }
+
+        guard let delegate = NSApp.delegate as? AppDelegate,
+              let panelController = delegate.panelController else { return false }
+        return panelController.isMouseInsideCollapsedNotchDeadZone(
+            panelWidth: panelWidth,
+            notchWidth: notchW,
+            notchHeight: notchHeight,
+            hasNotch: hasNotch,
+            ignoresHover: ignoresHover
+        )
+    }
+}
+
+extension NotchPanelView {
+    static func compactUsageProvider(
+        from snapshot: UsageSnapshot,
+        sessions: [String: SessionSnapshot],
+        rotatingSessionId: String?,
+        activeSessionId: String?,
+        primarySource: String
+    ) -> UsageProviderSnapshot? {
+        let sessionId = rotatingSessionId ?? activeSessionId ?? sessions.keys.sorted().first
+        let source = sessionId.flatMap { sessions[$0]?.source } ?? primarySource
+        guard let usageSource = UsageProviderSource(rawValue: source) else { return nil }
+        return snapshot.providers.first(where: { $0.source == usageSource })
+    }
+
+    static func isInCollapsedNotchDeadZone(
+        point: CGPoint,
+        panelWidth: CGFloat,
+        notchWidth: CGFloat,
+        hasNotch: Bool,
+        ignoresHover: Bool
+    ) -> Bool {
+        guard hasNotch, ignoresHover, notchWidth > 0, panelWidth > notchWidth else { return false }
+        let notchMinX = (panelWidth - notchWidth) / 2
+        let notchMaxX = notchMinX + notchWidth
+        return point.x >= notchMinX && point.x <= notchMaxX
+    }
+}
+
+
+// MARK: - Compact Wings (notch-level, 32px height)
+
+/// Left side: pixel character + status info
+private struct CompactLeftWing: View {
+    var appState: AppState
+    let expanded: Bool
+    let mascotSize: CGFloat
+    let hasNotch: Bool
+    let showToolStatus: Bool
+    @AppStorage(SettingsKey.sessionGroupingMode) private var groupingMode = SettingsDefaults.sessionGroupingMode
+
+    private var displaySession: SessionSnapshot? {
+        let sid = appState.rotatingSessionId ?? appState.activeSessionId ?? appState.sessions.keys.sorted().first
+        guard let sid else { return nil }
+        return appState.sessions[sid]
+    }
+    private var displaySource: String { displaySession?.source ?? appState.primarySource }
+    private var displayStatus: AgentStatus { displaySession?.status ?? .idle }
+    private var liveTool: String? { displaySession?.currentTool }
+    @State private var shownTool: String?
+    @State private var lingerTimer: Timer?
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if expanded {
+                AppLogoView(size: 36, showBackground: false)
+                if appState.sessions.count > 1 {
+                    HStack(spacing: 1) {
+                        ForEach([("all", "ALL"), ("project", "PRJ"), ("status", "STA"), ("cli", "CLI")], id: \.0) { tag, label in
+                            let selected = groupingMode == tag
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.15)) { groupingMode = tag }
+                            } label: {
+                                PixelText(
+                                    text: label,
+                                    color: selected ? Color(red: 0.3, green: 0.85, blue: 0.4) : .white.opacity(0.3),
+                                    pixelSize: 1.3
+                                )
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 4)
+                                .background(
+                                    Rectangle().fill(selected ? .white.opacity(0.1) : .clear)
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .background(Rectangle().fill(.white.opacity(0.05)))
+                    .overlay(Rectangle().stroke(.white.opacity(0.1), lineWidth: 1))
+                }
+            } else {
+                MascotView(source: displaySource, status: displayStatus, size: mascotSize)
+                    .id(displaySource)
+                    .transition(.opacity)
+                    .animation(.easeInOut(duration: 0.3), value: displaySource)
+
+                // On notch screens, show tool name only (no description, space is tight)
+                if hasNotch, showToolStatus, let tool = shownTool {
+                    Text(tool)
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(toolStatusColor(tool))
+                        .lineLimit(1)
+                        .fixedSize()
+                        .transition(.opacity)
+                }
+            }
+        }
+        .padding(.leading, 6)
+        .clipped()
+        .onChange(of: liveTool) { _, newTool in
+            lingerTimer?.invalidate()
+            if let newTool {
+                withAnimation(.easeInOut(duration: 0.2)) { shownTool = newTool }
+            } else {
+                lingerTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
+                    DispatchQueue.main.async {
+                        withAnimation(.easeOut(duration: 0.3)) { shownTool = nil }
+                    }
+                }
+            }
+        }
+        // Session rotation: immediately sync tool to avoid stale linger from previous session
+        .onChange(of: appState.rotatingSessionId) { _, _ in
+            lingerTimer?.invalidate()
+            let newTool = liveTool
+            withAnimation(.easeInOut(duration: 0.2)) { shownTool = newTool }
+        }
+    }
+}
+
+/// Right side: project name + session count (detailed) or just count (simple)
+private struct CompactRightWing: View {
+    var appState: AppState
+    let expanded: Bool
+    let hasNotch: Bool
+    @ObservedObject private var l10n = L10n.shared
+    @AppStorage(SettingsKey.soundEnabled) private var soundEnabled = SettingsDefaults.soundEnabled
+    @AppStorage(SettingsKey.showToolStatus) private var showToolStatus = SettingsDefaults.showToolStatus
+
+    private var displaySessionId: String? {
+        appState.rotatingSessionId ?? appState.activeSessionId ?? appState.sessions.keys.sorted().first
+    }
+    private var projectName: String? {
+        guard let sid = displaySessionId, let cwd = appState.sessions[sid]?.cwd, !cwd.isEmpty else { return nil }
+        return (cwd as NSString).lastPathComponent
+    }
+    private var displaySource: String {
+        guard let sid = displaySessionId else { return appState.primarySource }
+        return appState.sessions[sid]?.source ?? appState.primarySource
+    }
+    private var usageProvider: UsageProviderSnapshot? {
+        NotchPanelView.compactUsageProvider(
+            from: appState.usageSnapshot,
+            sessions: appState.sessions,
+            rotatingSessionId: appState.rotatingSessionId,
+            activeSessionId: appState.activeSessionId,
+            primarySource: displaySource
+        )
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if expanded {
+                NotchIconButton(icon: soundEnabled ? "speaker.wave.2" : "speaker.slash", tooltip: soundEnabled ? l10n["mute"] : l10n["enable_sound_tooltip"]) {
+                    soundEnabled.toggle()
+                }
+                NotchIconButton(icon: "gearshape", tooltip: l10n["settings"]) {
+                    SettingsWindowController.shared.show()
+                }
+                NotchIconButton(icon: "power", tint: Color(red: 1.0, green: 0.4, blue: 0.4), tooltip: l10n["quit"]) {
+                    NSApplication.shared.terminate(nil)
+                }
+            } else {
+                // Pending approval/question badge
+                if appState.status == .waitingApproval || appState.status == .waitingQuestion {
+                    Image(systemName: "bell.fill")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Color(red: 1.0, green: 0.7, blue: 0.28))
+                        .symbolEffect(.pulse, options: .repeating)
+                }
+
+                if let usageProvider {
+                    CompactUsageBadge(provider: usageProvider)
+                }
+
+                if showToolStatus {
+                    // Detailed mode: session count (project name is shown in center on non-notch)
+                    HStack(spacing: 1) {
+                        let active = appState.activeSessionCount
+                        let total = appState.totalSessionCount
+                        if active > 0 {
+                            Text("\(active)")
+                                .foregroundStyle(Color(red: 0.4, green: 1.0, blue: 0.5))
+                            Text("/")
+                                .foregroundStyle(.white.opacity(0.4))
+                        }
+                        Text("\(total)")
+                            .foregroundStyle(.white.opacity(0.9))
+                    }
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                } else {
+                    // Simple mode: original session count only
+                    HStack(spacing: 1) {
+                        let active = appState.activeSessionCount
+                        let total = appState.totalSessionCount
+                        if active > 0 {
+                            Text("\(active)")
+                                .foregroundStyle(Color(red: 0.4, green: 1.0, blue: 0.5))
+                            Text("/")
+                                .foregroundStyle(.white.opacity(0.4))
+                        }
+                        Text("\(total)")
+                            .foregroundStyle(.white.opacity(0.9))
+                    }
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                }
+            }
+        }
+        .padding(.trailing, 6)
+    }
+}
+
+struct CompactUsageBadge: View {
+    @ObservedObject private var l10n = L10n.shared
+    let provider: UsageProviderSnapshot
+
+    private var primary: UsageWindowStat { provider.primary }
+    private var tint: Color { Color(hex: primary.tintHex) }
+    private var label: String { l10n["usage_remaining"] }
+    private var helpText: String {
+        let headline = "\(provider.source.title) \(primary.label) \(l10n["usage_used"]): \(provider.primaryUsedPercentage)% · \(l10n["usage_remaining"]): \(provider.primaryRemainingPercentage)%"
+        var lines = [headline, primary.detail]
+        if let summary = provider.summary, !summary.isEmpty {
+            lines.append(summary)
+        }
+        if let monthly = provider.monthly {
+            var monthlyLine = "\(l10n["usage_recent_30_days"]) \(monthly.label): \(compactTokenSummary(monthly.totalTokens))"
+            if let costUSD = monthly.costUSD {
+                monthlyLine += " · \(String(format: "$%.2f", costUSD))"
+            }
+            lines.append(monthlyLine)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Text(primary.label.uppercased())
+                .foregroundStyle(.white.opacity(0.55))
+            Text(label.uppercased())
+                .foregroundStyle(.white.opacity(0.75))
+            Text("\(provider.primaryRemainingPercentage)%")
+                .foregroundStyle(tint)
+        }
+        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(
+            Capsule(style: .continuous)
+                .fill(.white.opacity(0.08))
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .strokeBorder(tint.opacity(0.35), lineWidth: 1)
+        )
+        .help(helpText)
+    }
+
+    private func compactTokenSummary(_ totalTokens: Int) -> String {
+        if totalTokens >= 1_000_000 {
+            return String(format: "%.1fM", Double(totalTokens) / 1_000_000)
+        }
+        if totalTokens >= 1_000 {
+            return String(format: "%.1fK", Double(totalTokens) / 1_000)
+        }
+        return "\(totalTokens)"
+    }
+}
+
+extension UsageProviderSnapshot {
+    func remainingPercentage(for window: UsageWindowStat) -> Int {
+        switch source {
+        case .claude:
+            max(0, min(100, 100 - window.percentage))
+        case .codex:
+            max(0, min(100, window.percentage))
+        }
+    }
+
+    var primaryRemainingPercentage: Int {
+        remainingPercentage(for: primary)
+    }
+
+    var primaryUsedPercentage: Int {
+        max(0, min(100, 100 - primaryRemainingPercentage))
+    }
+}
+
+// MARK: - Tool Status Helpers
+
+/// Accent color for each tool category — shared between notch and non-notch views
+private func toolStatusColor(_ tool: String) -> Color {
+    switch tool.lowercased() {
+    case "bash": return Color(red: 0.4, green: 1.0, blue: 0.5)
+    case "edit", "write": return Color(red: 0.5, green: 0.7, blue: 1.0)
+    case "read": return Color(red: 0.9, green: 0.8, blue: 0.4)
+    case "grep", "glob": return Color(red: 0.8, green: 0.6, blue: 1.0)
+    case "agent": return Color(red: 1.0, green: 0.6, blue: 0.4)
+    default: return .white.opacity(0.7)
+    }
+}
+
+// MARK: - Compact Tool Status (non-notch center area)
+
+/// Shows the current tool activity in the center of the bar on non-notch screens.
+/// Keeps the last tool visible for a short linger period to avoid flashing.
+private struct CompactToolStatus: View {
+    var appState: AppState
+
+    /// Single source of truth: all fields derive from the same session.
+    private var displaySessionId: String? {
+        appState.rotatingSessionId ?? appState.activeSessionId ?? appState.sessions.keys.sorted().first
+    }
+    private var displaySession: SessionSnapshot? {
+        guard let sid = displaySessionId else { return nil }
+        return appState.sessions[sid]
+    }
+    private var liveTool: String? { displaySession?.currentTool }
+    private var liveDesc: String? { displaySession?.toolDescription }
+    private var displayStatus: AgentStatus { displaySession?.status ?? .idle }
+    private var projectName: String? {
+        guard let cwd = displaySession?.cwd, !cwd.isEmpty else { return nil }
+        return (cwd as NSString).lastPathComponent
+    }
+
+    @State private var shownTool: String?
+    @State private var shownDesc: String?
+    @State private var lingerTimer: Timer?
+
+    /// Extract meaningful part of description — file paths show last component
+    private func shortDesc(_ desc: String) -> String {
+        let trimmed = desc.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.contains("/") {
+            return (trimmed as NSString).lastPathComponent
+        }
+        return trimmed
+    }
+
+    /// Whether there's any activity worth showing (tool running or thinking)
+    private var hasActivity: Bool { shownTool != nil || displayStatus == .processing }
+
+    var body: some View {
+        HStack(spacing: 5) {
+            // Project name — only shown when there's tool activity
+            if hasActivity, let project = projectName {
+                Text(project)
+                    .foregroundStyle(.white.opacity(0.8))
+                    .id("center-project-\(displaySessionId ?? "")")
+                    .transition(.opacity)
+            }
+
+            // Tool status or thinking indicator
+            if let tool = shownTool {
+                TypingIndicator(fontSize: 11, label: tool, bright: true, color: toolStatusColor(tool))
+                    .id("tool-\(tool)-\(appState.rotatingSessionId ?? "")")
+                if let desc = shownDesc {
+                    Text(shortDesc(desc))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .truncationMode(.tail)
+                }
+            } else if displayStatus == .processing {
+                TypingIndicator(fontSize: 11, label: "thinking", bright: true)
+                    .id("thinking-\(appState.rotatingSessionId ?? "")")
+            }
+        }
+        .font(.system(size: 11, weight: .medium, design: .monospaced))
+        .lineLimit(1)
+        .padding(.leading, 6)
+        .animation(.easeInOut(duration: 0.25), value: shownTool)
+        .animation(.easeInOut(duration: 0.15), value: shownDesc)
+        .animation(.easeInOut(duration: 0.3), value: appState.rotatingSessionId)
+        .onChange(of: liveTool) { _, newTool in
+            lingerTimer?.invalidate()
+            if let newTool {
+                shownTool = newTool
+                shownDesc = liveDesc
+            } else {
+                lingerTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
+                    DispatchQueue.main.async {
+                        withAnimation(.easeOut(duration: 0.3)) {
+                            shownTool = nil
+                            shownDesc = nil
+                        }
+                    }
+                }
+            }
+        }
+        .onChange(of: liveDesc) { _, newDesc in
+            if liveTool != nil { shownDesc = newDesc }
+        }
+        // Session rotation: immediately sync to avoid stale linger from previous session
+        .onChange(of: appState.rotatingSessionId) { _, _ in
+            lingerTimer?.invalidate()
+            withAnimation(.easeInOut(duration: 0.2)) {
+                shownTool = liveTool
+                shownDesc = liveDesc
+            }
+        }
+    }
+}
+
+private struct NotchIconButton: View {
+    let icon: String
+    var tint: Color = .white
+    var tooltip: String? = nil
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(tint.opacity(hovering ? 1.0 : 0.85))
+                .frame(width: 22, height: 22)
+                .background(
+                    Circle()
+                        .fill(tint.opacity(hovering ? 0.2 : 0.08))
+                )
+                .scaleEffect(hovering ? 1.1 : 1.0)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .onHover { h in withAnimation(NotchAnimation.micro) { hovering = h } }
+        .help(tooltip ?? "")
+    }
+}
+
+// MARK: - Idle Indicator Bar
+
+private struct IdleIndicatorBar: View {
+    let mascotSize: CGFloat
+    let compactWingWidth: CGFloat
+    let notchW: CGFloat
+    let notchHeight: CGFloat
+    let hasNotch: Bool
+    let hovered: Bool
+    @ObservedObject private var l10n = L10n.shared
+    @AppStorage(SettingsKey.soundEnabled) private var soundEnabled = SettingsDefaults.soundEnabled
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // Left: mascot
+            HStack(spacing: 6) {
+                MascotView(source: "claude", status: .idle, size: mascotSize)
+                    .opacity(hovered ? 0.9 : 0.5)
+            }
+            .padding(.leading, 6)
+
+            Spacer(minLength: hasNotch ? notchW : 0)
+
+            // Right: expanded shows text + buttons, collapsed shows nothing
+            if hovered {
+                HStack(spacing: 8) {
+                    Text("0")
+                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.4))
+
+                    HStack(spacing: 4) {
+                        NotchIconButton(icon: soundEnabled ? "speaker.wave.2" : "speaker.slash", tooltip: soundEnabled ? l10n["mute"] : l10n["enable_sound_tooltip"]) {
+                            soundEnabled.toggle()
+                        }
+                        NotchIconButton(icon: "gearshape", tooltip: l10n["settings"]) {
+                            SettingsWindowController.shared.show()
+                        }
+                        NotchIconButton(icon: "power", tint: Color(red: 1.0, green: 0.4, blue: 0.4), tooltip: l10n["quit"]) {
+                            NSApplication.shared.terminate(nil)
+                        }
+                    }
+                }
+                .padding(.trailing, 6)
+                .transition(.opacity)
+            }
+        }
+        .frame(height: notchHeight)
+        .animation(NotchAnimation.micro, value: hovered)
+    }
+}
+
+// MARK: - Approval Bar (below notch, auto-expanded)
+
+struct ApprovalBar: View {
+    let tool: String
+    let toolInput: [String: Any]?
+    let queuePosition: Int
+    let queueTotal: Int
+    let onAllow: () -> Void
+    let onAlwaysAllow: () -> Void
+    let onDeny: () -> Void
+
+    private var fileName: String? {
+        guard let fp = toolInput?["file_path"] as? String else { return nil }
+        return (fp as NSString).lastPathComponent
+    }
+
+    private var filePath: String? {
+        toolInput?["file_path"] as? String
+    }
+
+    private var serverName: String? {
+        toolInput?["server_name"] as? String
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            // Tool name + file context
+            HStack(spacing: 6) {
+                Text("!")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color(red: 1.0, green: 0.7, blue: 0.28))
+                Text(tool)
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color(red: 1.0, green: 0.7, blue: 0.28))
+                if let server = serverName {
+                    Text("(\(server))")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(Color(red: 0.6, green: 0.7, blue: 0.9))
+                }
+                if let name = fileName {
+                    Text(name)
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+                if queueTotal > 1 {
+                    Text("\(queuePosition)/\(queueTotal)")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Color.white.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 14)
+
+            // Tool-specific detail view
+            if toolInput != nil {
+                toolDetailView
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.white.opacity(0.04))
+            }
+
+            // Pixel-style buttons
+            HStack(spacing: 6) {
+                PixelButton(label: L10n.shared["deny"], fg: .white.opacity(0.95), bg: Color(red: 0.45, green: 0.12, blue: 0.12), border: Color(red: 0.7, green: 0.25, blue: 0.25), action: onDeny)
+                PixelButton(label: L10n.shared["allow_once"], fg: .white.opacity(0.95), bg: Color(red: 0.16, green: 0.38, blue: 0.18), border: Color(red: 0.28, green: 0.62, blue: 0.32), action: onAllow)
+                PixelButton(label: L10n.shared["always"], fg: .white.opacity(0.95), bg: Color(red: 0.14, green: 0.28, blue: 0.52), border: Color(red: 0.28, green: 0.48, blue: 0.82), action: onAlwaysAllow)
+            }
+            .padding(.horizontal, 14)
+        }
+        .padding(.vertical, 10)
+    }
+
+    @ViewBuilder
+    private var toolDetailView: some View {
+        switch tool {
+        case "Bash":
+            // Show command as a terminal prompt
+            VStack(alignment: .leading, spacing: 2) {
+                if let cmd = toolInput?["command"] as? String {
+                    HStack(alignment: .top, spacing: 4) {
+                        Text("$")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color(red: 0.3, green: 0.85, blue: 0.4))
+                        Text(cmd)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .lineLimit(3)
+                    }
+                }
+            }
+
+        case "Edit":
+            // Show diff style: - old / + new
+            VStack(alignment: .leading, spacing: 3) {
+                if let fp = filePath {
+                    Text(fp)
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.35))
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                }
+                if let old = toolInput?["old_string"] as? String {
+                    HStack(alignment: .top, spacing: 4) {
+                        Text("−")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color(red: 1.0, green: 0.4, blue: 0.4))
+                        Text(old.prefix(120))
+                            .font(.system(size: 9.5, design: .monospaced))
+                            .foregroundStyle(Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.7))
+                            .lineLimit(2)
+                    }
+                }
+                if let new = toolInput?["new_string"] as? String {
+                    HStack(alignment: .top, spacing: 4) {
+                        Text("+")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color(red: 0.3, green: 0.85, blue: 0.4))
+                        Text(new.prefix(120))
+                            .font(.system(size: 9.5, design: .monospaced))
+                            .foregroundStyle(Color(red: 0.3, green: 0.85, blue: 0.4).opacity(0.7))
+                            .lineLimit(2)
+                    }
+                }
+            }
+
+        case "Write":
+            // Show file path + content preview
+            VStack(alignment: .leading, spacing: 3) {
+                if let fp = filePath {
+                    Text(fp)
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.35))
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                }
+                if let content = toolInput?["content"] as? String {
+                    Text(content.prefix(200))
+                        .font(.system(size: 9.5, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .lineLimit(4)
+                }
+            }
+
+        case "Read":
+            // Show file path + line range
+            VStack(alignment: .leading, spacing: 2) {
+                if let fp = filePath {
+                    Text(fp)
+                        .font(.system(size: 9.5, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                }
+                if let offset = toolInput?["offset"] as? Int,
+                   let limit = toolInput?["limit"] as? Int {
+                    Text("\(L10n.shared["lines"]) \(offset + 1)–\(offset + limit)")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.4))
+                }
+            }
+
+        case "Grep":
+            // Show pattern + optional path
+            VStack(alignment: .leading, spacing: 2) {
+                if let pattern = toolInput?["pattern"] as? String {
+                    HStack(alignment: .top, spacing: 4) {
+                        Text("/")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color(red: 0.9, green: 0.6, blue: 0.9))
+                        Text(pattern)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(Color(red: 0.9, green: 0.6, blue: 0.9).opacity(0.8))
+                            .lineLimit(2)
+                    }
+                }
+                if let path = toolInput?["path"] as? String {
+                    Text(path)
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.35))
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                }
+            }
+
+        case "Glob":
+            // Show glob pattern
+            VStack(alignment: .leading, spacing: 2) {
+                if let pattern = toolInput?["pattern"] as? String {
+                    Text(pattern)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Color(red: 0.6, green: 0.8, blue: 1.0))
+                        .lineLimit(2)
+                }
+                if let path = toolInput?["path"] as? String {
+                    Text(path)
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.35))
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                }
+            }
+
+        default:
+            // Generic: show all key-value pairs
+            VStack(alignment: .leading, spacing: 2) {
+                if let input = toolInput {
+                    ForEach(Array(input.keys.sorted().prefix(4)), id: \.self) { key in
+                        let val = input[key].map { "\($0)" } ?? ""
+                        HStack(alignment: .top, spacing: 4) {
+                            Text(key)
+                                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(Color(red: 0.6, green: 0.7, blue: 0.9))
+                            Text(String(val.prefix(100)))
+                                .font(.system(size: 9.5, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.6))
+                                .lineLimit(2)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Question Bar (below notch, auto-expanded)
+
+struct QuestionBar: View {
+    let question: String
+    let options: [String]?
+    let descriptions: [String]?
+    let sessionSource: String?
+    let sessionContext: String?
+    let queuePosition: Int
+    let queueTotal: Int
+    let onAnswer: (String) -> Void
+    let onSkip: () -> Void
+
+    @State private var textInput = ""
+    @FocusState private var isFocused: Bool
+    @State private var selectedIndex: Int? = nil
+
+    private let cyan = Color(red: 0.4, green: 0.7, blue: 1.0)
+
+    var body: some View {
+        VStack(spacing: 8) {
+            // Session context
+            if sessionSource != nil || sessionContext != nil {
+                HStack(spacing: 5) {
+                    if let src = sessionSource, let icon = cliIcon(source: src, size: 12) {
+                        Image(nsImage: icon)
+                            .resizable()
+                            .frame(width: 12, height: 12)
+                    }
+                    if let cwd = sessionContext {
+                        Image(systemName: "folder.fill")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.white.opacity(0.5))
+                        Text((cwd as NSString).lastPathComponent)
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 14)
+            }
+
+            // Header
+            HStack(spacing: 6) {
+                Text("?")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(cyan)
+                Text(question)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(3)
+                if queueTotal > 1 {
+                    Text("\(queuePosition)/\(queueTotal)")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Color.white.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 14)
+
+            // Options
+            if let options = options, !options.isEmpty {
+                VStack(spacing: 4) {
+                    ForEach(Array(options.enumerated()), id: \.offset) { idx, option in
+                        let desc = descriptions?.indices.contains(idx) == true ? descriptions?[idx] : nil
+                        OptionRow(index: idx + 1, label: option, description: desc, isSelected: selectedIndex == idx, accent: cyan) {
+                            selectedIndex = idx
+                            onAnswer(option)
+                        }
+                    }
+                }
+                .padding(.horizontal, 14)
+            } else {
+                // Text input
+                HStack(spacing: 6) {
+                    Text(">")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color(red: 0.3, green: 0.85, blue: 0.4))
+                    TextField(L10n.shared["type_answer"], text: $textInput)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .foregroundStyle(.white)
+                        .focused($isFocused)
+                        .onSubmit {
+                            if !textInput.isEmpty { onAnswer(textInput) }
+                        }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color.white.opacity(0.05))
+                .cornerRadius(4)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+                )
+                .padding(.horizontal, 14)
+            }
+
+            // Skip button
+            HStack(spacing: 6) {
+                PixelButton(
+                    label: L10n.shared["skip"],
+                    fg: .white.opacity(0.6),
+                    bg: Color.white.opacity(0.06),
+                    border: Color.white.opacity(0.12),
+                    action: onSkip
+                )
+                if options == nil || options?.isEmpty == true {
+                    PixelButton(
+                        label: L10n.shared["submit"],
+                        fg: .white.opacity(0.95),
+                        bg: Color(red: 0.16, green: 0.38, blue: 0.18),
+                        border: Color(red: 0.28, green: 0.62, blue: 0.32),
+                        action: { if !textInput.isEmpty { onAnswer(textInput) } }
+                    )
+                }
+            }
+            .padding(.horizontal, 14)
+        }
+        .padding(.vertical, 10)
+        .onAppear { isFocused = true }
+    }
+}
+
+// MARK: - Option Row
+
+private struct OptionRow: View {
+    let index: Int
+    let label: String
+    let description: String?
+    let isSelected: Bool
+    let accent: Color
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                // Selector arrow
+                Text(hovering ? "▸" : " ")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(accent)
+                    .frame(width: 10)
+                // Number
+                Text("\(index).")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(accent.opacity(hovering ? 1 : 0.6))
+                // Label + Description
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(label)
+                        .font(.system(size: 10.5, weight: hovering ? .semibold : .regular, design: .monospaced))
+                        .foregroundStyle(.white.opacity(hovering ? 1 : 0.75))
+                    if let description, !description.isEmpty {
+                        Text(description)
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.45))
+                            .lineLimit(2)
+                    }
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(hovering ? Color.white.opacity(0.08) : Color.white.opacity(0.03))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .strokeBorder(hovering ? accent.opacity(0.4) : Color.clear, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { h in withAnimation(NotchAnimation.micro) { hovering = h } }
+    }
+}
+
+private struct PixelButton: View {
+    let label: String
+    let fg: Color
+    let bg: Color
+    let border: Color
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(fg)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 7)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(hovering ? bg.opacity(1.5) : bg)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .strokeBorder(hovering ? border : border.opacity(0.4), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .onHover { h in withAnimation(NotchAnimation.micro) { hovering = h } }
+    }
+}
+
+// MARK: - Session List
+
+enum SessionListPresentation {
+    case notch
+    case menuBar
+}
+
+private struct SessionListContentHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+private enum SessionListRowStyle {
+    case fullCard
+    case compactRow
+}
+
+struct SessionListView: View {
+    var appState: AppState
+    /// When set, only show this session (auto-expand on completion)
+    var onlySessionId: String? = nil
+    var presentation: SessionListPresentation = .notch
+    @AppStorage(SettingsKey.sessionGroupingMode) private var groupingMode = SettingsDefaults.sessionGroupingMode
+    @AppStorage(SettingsKey.maxVisibleSessions) private var maxVisibleSessions = SettingsDefaults.maxVisibleSessions
+    @State private var codexInput = ""
+
+    private var activeCodexSessionId: String? {
+        guard let sessionId = appState.activeSessionId,
+              let session = appState.sessions[sessionId],
+              session.source == "codex",
+              appState.canContinueActiveCodexSession else { return nil }
+        return sessionId
+    }
+
+    static func needsScroll(
+        totalSessionCount: Int,
+        groupHeaderCount: Int,
+        hasComposer: Bool,
+        maxVisibleSessions: Int,
+        onlySessionId: String?,
+        presentation: SessionListPresentation = .notch
+    ) -> Bool {
+        guard onlySessionId == nil else { return false }
+
+        // Menu bar popover has a fixed outer height and its own scroller —
+        // always let the list scroll inside it so overflow never gets
+        // silently clipped when cards, headers, or the composer combine to
+        // exceed the popover's content area.
+        if presentation == .menuBar {
+            return totalSessionCount > 0
+        }
+
+        let estimatedVisibleUnits = Double(totalSessionCount)
+            + (Double(groupHeaderCount) * 0.3)
+            + (hasComposer ? 0.9 : 0)
+
+        return estimatedVisibleUnits > Double(maxVisibleSessions)
+    }
+
+    static func usesCompactRow(
+        status: AgentStatus,
+        sessionId: String,
+        activeSessionId: String?,
+        onlySessionId: String?
+    ) -> Bool {
+        guard onlySessionId == nil else { return false }
+        guard sessionId != activeSessionId else { return false }
+
+        switch status {
+        case .idle:
+            return true
+        case .processing, .running, .waitingApproval, .waitingQuestion:
+            return false
+        }
+    }
+
+    var body: some View {
+        let snapshot = appState.sessionListPresentation(
+            groupingMode: groupingMode,
+            onlySessionId: onlySessionId
+        )
+        let needsScroll = Self.needsScroll(
+            totalSessionCount: snapshot.totalSessionCount,
+            groupHeaderCount: snapshot.groupHeaderCount,
+            hasComposer: activeCodexSessionId != nil,
+            maxVisibleSessions: maxVisibleSessions,
+            onlySessionId: onlySessionId,
+            presentation: presentation
+        )
+        let notchScrollMaxHeight = CGFloat(maxVisibleSessions) * 90
+
+        Group {
+            if presentation == .menuBar {
+                ScrollView(.vertical) {
+                    sessionRows(lazy: true, groups: snapshot.groups)
+                }
+                .scrollIndicators(.automatic)
+            } else if needsScroll {
+                AutoHeightSessionScrollView(maxHeight: notchScrollMaxHeight) {
+                    sessionRows(lazy: false, groups: snapshot.groups)
+                } scrollContent: {
+                    sessionRows(lazy: true, groups: snapshot.groups)
+                }
+                .clipShape(
+                    UnevenRoundedRectangle(
+                        topLeadingRadius: 0, bottomLeadingRadius: 20,
+                        bottomTrailingRadius: 20, topTrailingRadius: 0,
+                        style: .continuous
+                    )
+                )
+            } else {
+                sessionRows(lazy: false, groups: snapshot.groups)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func sessionRows(lazy: Bool, groups: [SessionListGroupPresentation]) -> some View {
+        if lazy {
+            LazyVStack(spacing: 6) {
+                sessionRowSections(groups: groups)
+            }
+            .padding(.vertical, 4)
+        } else {
+            VStack(spacing: 6) {
+                sessionRowSections(groups: groups)
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    @ViewBuilder
+    private func sessionRowSections(groups: [SessionListGroupPresentation]) -> some View {
+        ForEach(groups) { group in
+            if !group.header.isEmpty {
+                HStack(spacing: 6) {
+                    if let src = group.source, let icon = cliIcon(source: src) {
+                        Image(nsImage: icon)
+                            .resizable()
+                            .frame(width: 14, height: 14)
+                    }
+                    Text(group.header)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.5))
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 6)
+                .padding(.bottom, 2)
+            }
+
+            ForEach(group.ids, id: \.self) { sessionId in
+                if let session = appState.sessions[sessionId] {
+                    let style = rowStyle(for: sessionId, session: session)
+                    let needsCompletionReview = appState.needsCompletionReview(sessionId: sessionId)
+                    switch style {
+                    case .fullCard:
+                        SessionCard(
+                            appState: appState,
+                            sessionId: sessionId,
+                            session: session,
+                            isCompletion: onlySessionId != nil,
+                            isSelected: sessionId == appState.activeSessionId,
+                            needsCompletionReview: needsCompletionReview
+                        )
+                    case .compactRow:
+                        CompactSessionRow(
+                            appState: appState,
+                            sessionId: sessionId,
+                            session: session,
+                            isSelected: sessionId == appState.activeSessionId,
+                            needsCompletionReview: needsCompletionReview
+                        )
+                        .equatable()
+                    }
+                }
+            }
+        }
+
+        if onlySessionId != nil && appState.sessions.count > 1 {
+            SessionsExpandLink(count: appState.sessions.count) {
+                withAnimation(NotchAnimation.open) {
+                    appState.surface = .sessionList
+                    appState.cancelCompletionQueue()
+                }
+            }
+        }
+
+        if let sessionId = activeCodexSessionId,
+           let session = appState.sessions[sessionId] {
+            CodexComposerBar(
+                projectName: session.projectDisplayName,
+                text: $codexInput,
+                onSubmit: {
+                    let value = codexInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !value.isEmpty else { return }
+                    appState.sendPromptToSession(sessionId, text: value)
+                    codexInput = ""
+                }
+            )
+        }
+    }
+
+    private func rowStyle(for sessionId: String, session: SessionSnapshot) -> SessionListRowStyle {
+        if Self.usesCompactRow(
+            status: session.status,
+            sessionId: sessionId,
+            activeSessionId: appState.activeSessionId,
+            onlySessionId: onlySessionId
+        ) {
+            return .compactRow
+        }
+        return .fullCard
+    }
+}
+
+private struct CodexComposerBar: View {
+    let projectName: String
+    @Binding var text: String
+    let onSubmit: () -> Void
+
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                if let icon = cliIcon(source: "codex", size: 12) {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .frame(width: 12, height: 12)
+                }
+                Text(projectName)
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.65))
+                Spacer()
+            }
+
+            HStack(spacing: 8) {
+                Text(">")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color(red: 0.3, green: 0.85, blue: 0.4))
+                TextField(L10n.shared["type_message"], text: $text)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(.white)
+                    .focused($isFocused)
+                    .onSubmit(onSubmit)
+                Button(action: onSubmit) {
+                    Text(L10n.shared["send"])
+                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(Color(red: 0.16, green: 0.38, blue: 0.18))
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
+                .buttonStyle(.plain)
+                .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .opacity(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.45 : 1)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(Color.white.opacity(0.05))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 4)
+        .padding(.bottom, 8)
+        .onAppear { isFocused = false }
+    }
+}
+
+private struct AutoHeightSessionScrollView<Content: View, ScrollContent: View>: View {
+    let maxHeight: CGFloat
+    @ViewBuilder let content: () -> Content
+    @ViewBuilder let scrollContent: () -> ScrollContent
+    @State private var contentHeight: CGFloat = 0
+
+    var body: some View {
+        if contentHeight > maxHeight {
+            ScrollView(.vertical) {
+                measuredScrollContent
+            }
+            .scrollIndicators(.automatic)
+            .frame(height: maxHeight)
+        } else {
+            measuredContent
+        }
+    }
+
+    private var measuredContent: some View {
+        content()
+            .background(
+                GeometryReader { geo in
+                    Color.clear.preference(
+                        key: SessionListContentHeightKey.self,
+                        value: geo.size.height
+                    )
+                }
+            )
+            .onPreferenceChange(SessionListContentHeightKey.self) { height in
+                if height > 0 {
+                    contentHeight = height
+                }
+            }
+    }
+
+    private var measuredScrollContent: some View {
+        scrollContent()
+            .background(
+                GeometryReader { geo in
+                    Color.clear.preference(
+                        key: SessionListContentHeightKey.self,
+                        value: geo.size.height
+                    )
+                }
+            )
+            .onPreferenceChange(SessionListContentHeightKey.self) { height in
+                if height > 0 {
+                    contentHeight = height
+                }
+            }
+    }
+}
+
+private struct SessionIdentityLine: View {
+    let session: SessionSnapshot
+    let sessionId: String
+    let projectFontSize: CGFloat
+    let projectColor: Color
+    let sessionFontSize: CGFloat
+    let sessionColor: Color
+    let dividerColor: Color
+    let cardHovering: Bool
+
+    private var displaySessionId: String { session.displaySessionId(sessionId: sessionId) }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ProjectNameLink(
+                name: session.projectDisplayName,
+                cwd: session.cwd,
+                fontSize: projectFontSize,
+                color: projectColor,
+                cardHovering: cardHovering
+            )
+            .layoutPriority(2)
+
+            if let sessionLabel = session.sessionLabel {
+                Text("#\(sessionLabel)")
+                    .font(.system(size: sessionFontSize, weight: .medium, design: .monospaced))
+                    .foregroundStyle(sessionColor)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .layoutPriority(1)
+
+                Text("·")
+                    .font(.system(size: sessionFontSize, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(dividerColor)
+
+                Text("#\(shortSessionId(displaySessionId))")
+                    .font(.system(size: sessionFontSize, weight: .medium, design: .monospaced))
+                    .foregroundStyle(sessionColor.opacity(0.6))
+                    .fixedSize()
+            } else {
+                Text("#\(shortSessionId(displaySessionId))")
+                    .font(.system(size: sessionFontSize, weight: .medium, design: .monospaced))
+                    .foregroundStyle(sessionColor.opacity(0.6))
+                    .fixedSize()
+            }
+        }
+    }
+}
+
+private struct ProjectNameLink: View {
+    let name: String
+    let cwd: String?
+    let fontSize: CGFloat
+    let color: Color
+    let cardHovering: Bool
+
+    var body: some View {
+        Text(name)
+            .font(.system(size: fontSize, weight: .bold, design: .monospaced))
+            .foregroundStyle(color)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .overlay(alignment: .bottom) {
+                if cwd != nil {
+                    GeometryReader { geo in
+                        Path { path in
+                            path.move(to: CGPoint(x: 0, y: geo.size.height))
+                            path.addLine(to: CGPoint(x: geo.size.width, y: geo.size.height))
+                        }
+                        .stroke(style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+                        .foregroundStyle(color.opacity(cardHovering ? 0.5 : 0.2))
+                    }
+                }
+            }
+            .onTapGesture {
+                if let cwd = cwd {
+                    Self.openInEditor(cwd)
+                }
+            }
+            .help(cwd != nil ? L10n.shared["open_path"] : "")
+    }
+
+    private static let editorCandidates: [(executable: String, arguments: [String])] = [
+        ("code", ["--reuse-window"]),
+        ("cursor", ["--reuse-window"]),
+        ("windsurf", ["--reuse-window"]),
+    ]
+
+    private static func openInEditor(_ path: String) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            for candidate in editorCandidates {
+                if let resolved = resolveExecutable(candidate.executable) {
+                    let process = Process()
+                    process.executableURL = URL(fileURLWithPath: resolved)
+                    process.arguments = candidate.arguments + [path]
+                    if (try? process.run()) != nil { return }
+                }
+            }
+            DispatchQueue.main.async {
+                NSWorkspace.shared.open(URL(fileURLWithPath: path))
+            }
+        }
+    }
+
+    private static func resolveExecutable(_ name: String) -> String? {
+        let paths = [
+            "/opt/homebrew/bin/\(name)",
+            "/usr/local/bin/\(name)",
+            "/usr/bin/\(name)",
+        ]
+        for path in paths {
+            if FileManager.default.isExecutableFile(atPath: path) { return path }
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+        process.arguments = [name]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        guard (try? process.run()) != nil else { return nil }
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return nil }
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return output?.isEmpty == false ? output : nil
+    }
+}
+
+private struct SessionsExpandLink: View {
+    let count: Int
+    let action: () -> Void
+    @State private var hovering = false
+    @State private var hoverTimer: Timer?
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Rectangle().fill(.white.opacity(0.15)).frame(height: 1)
+                Text("\(count) \(L10n.shared["n_sessions"])")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(hovering ? 0.7 : 0.45))
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.white.opacity(hovering ? 0.5 : 0.3))
+                Rectangle().fill(.white.opacity(0.15)).frame(height: 1)
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { h in
+            withAnimation(NotchAnimation.micro) { hovering = h }
+            hoverTimer?.invalidate()
+            hoverTimer = nil
+            if h {
+                hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: false) { _ in
+                    Task { @MainActor in action() }
+                }
+            }
+        }
+    }
+}
+
+private struct SessionCard: View {
+    var appState: AppState
+    let sessionId: String
+    let session: SessionSnapshot
+    var isCompletion: Bool = false
+    var isSelected: Bool = false
+    var needsCompletionReview: Bool = false
+    @State private var hovering = false
+    @State private var inlineAnswer = ""
+    @AppStorage(SettingsKey.contentFontSize) private var contentFontSize = SettingsDefaults.contentFontSize
+    @AppStorage(SettingsKey.aiMessageLines) private var aiMessageLines = SettingsDefaults.aiMessageLines
+    @AppStorage(SettingsKey.showAgentDetails) private var showAgentDetails = SettingsDefaults.showAgentDetails
+    private var fontSize: CGFloat { CGFloat(contentFontSize) }
+    private var aiLineLimit: Int? {
+        guard aiMessageLines > 0 else { return nil }
+        return isCompletion ? max(aiMessageLines, 5) : aiMessageLines
+    }
+    private var visibleMessages: [ChatMessage] {
+        return session.status != .idle ? Array(session.recentMessages.suffix(2)) : session.recentMessages
+    }
+    private var pendingPermission: PermissionRequest? {
+        guard appState.pendingPermission?.event.sessionId == sessionId else { return nil }
+        return appState.pendingPermission
+    }
+    private var pendingQuestion: QuestionRequest? {
+        guard appState.pendingQuestion?.event.sessionId == sessionId else { return nil }
+        return appState.pendingQuestion
+    }
+    private var statusNameColor: Color {
+        if session.status == .idle && session.interrupted {
+            return Color(red: 1.0, green: 0.45, blue: 0.35)
+        }
+        switch session.status {
+        case .processing, .running:              return Color(red: 0.3, green: 0.85, blue: 0.4)
+        case .waitingApproval, .waitingQuestion:  return Color(red: 1.0, green: 0.6, blue: 0.2)
+        case .idle:                               return .white
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            VStack(spacing: 3) {
+                MascotView(source: session.source, status: session.status, size: 32, animated: mascotAnimated)
+                if showAgentDetails && !session.subagents.isEmpty {
+                    let sorted = session.subagents.values.sorted { $0.startTime < $1.startTime }
+                    let rows = stride(from: 0, to: sorted.count, by: 4).map {
+                        Array(sorted[$0..<min($0 + 4, sorted.count)])
+                    }
+                    VStack(spacing: 1) {
+                        ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                            HStack(spacing: 1) {
+                                ForEach(row, id: \.agentId) { sub in
+                                    MiniAgentIcon(active: sub.status != .idle, size: 8)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .frame(width: 36)
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .center, spacing: 8) {
+                    SessionIdentityLine(
+                        session: session,
+                        sessionId: sessionId,
+                        projectFontSize: fontSize + 2,
+                        projectColor: statusNameColor,
+                        sessionFontSize: fontSize,
+                        sessionColor: .white.opacity(0.76),
+                        dividerColor: .white.opacity(0.28),
+                        cardHovering: hovering
+                    )
+                    Spacer(minLength: 8)
+
+                    HStack(spacing: 4) {
+                        if session.interrupted {
+                            SessionTag("INT", color: Color(red: 1.0, green: 0.6, blue: 0.2))
+                        }
+                        if session.isYoloMode == true {
+                            SessionTag("YOLO", color: Color(red: 1.0, green: 0.35, blue: 0.35))
+                        }
+                        if needsCompletionReview {
+                            SessionTag(L10n.shared["completion_pending_review"], color: completionReviewColor)
+                        }
+                        SessionTag(timeAgoText(session.lastActivity))
+                        TerminalJumpButton(session: session, sessionId: sessionId, appState: appState)
+                    }
+                }
+
+                if let prompt = session.lastUserPrompt,
+                   session.recentMessages.isEmpty {
+                    Text(prompt)
+                        .font(.system(size: fontSize, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.45))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+
+                if !session.recentMessages.isEmpty || session.status != .idle {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(visibleMessages) { msg in
+                            if msg.isUser {
+                                HStack(alignment: .top, spacing: 4) {
+                                    Text(">")
+                                        .font(.system(size: fontSize, weight: .bold, design: .monospaced))
+                                        .foregroundStyle(Color(red: 0.3, green: 0.85, blue: 0.4))
+                                    Text(ChatMessageTextFormatter.literalText(msg.text))
+                                        .font(.system(size: fontSize, weight: .medium, design: .monospaced))
+                                        .foregroundStyle(.white.opacity(0.9))
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                }
+                            } else {
+                                HStack(alignment: .top, spacing: 4) {
+                                    Text("$")
+                                        .font(.system(size: fontSize, weight: .bold, design: .monospaced))
+                                        .foregroundStyle(Color(red: 0.85, green: 0.47, blue: 0.34))
+                                    Text(ChatMessageTextFormatter.inlineMarkdown(condensedMessagePreview(stripDirectives(msg.text))))
+                                        .font(.system(size: fontSize, design: .monospaced))
+                                        .foregroundStyle(.white.opacity(0.85))
+                                        .lineLimit(aiLineLimit)
+                                        .truncationMode(.tail)
+                                }
+                            }
+                        }
+
+                        if session.status != .idle {
+                            HStack(spacing: 4) {
+                                Text("$")
+                                    .font(.system(size: fontSize, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(Color(red: 0.85, green: 0.47, blue: 0.34))
+                                if let tool = session.currentTool {
+                                    Text(session.toolDescription ?? tool)
+                                        .font(.system(size: fontSize, design: .monospaced))
+                                        .foregroundStyle(.white.opacity(0.75))
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                } else {
+                                    TypingIndicator(fontSize: fontSize, label: "thinking")
+                                }
+                            }
+                        }
+                    }
+                    .padding(.leading, 4)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(cardBackgroundColor)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(cardBorderColor, lineWidth: 1)
+        )
+        .padding(.horizontal, 6)
+        .contentShape(Rectangle())
+        .onHover { h in withAnimation(NotchAnimation.micro) { hovering = h } }
+        .onTapGesture(perform: handleTap)
+    }
+
+    private func handleTap() {
+        guard isCompletion else { return }
+        appState.jumpToSession(sessionId)
+    }
+
+    private var cardBackgroundColor: Color {
+        if isSelected {
+            return Color.white.opacity(0.12)
+        }
+        if needsCompletionReview {
+            return hovering ? completionReviewColor.opacity(0.24) : completionReviewColor.opacity(0.18)
+        }
+        return hovering ? Color.white.opacity(0.10) : Color.white.opacity(0.05)
+    }
+
+    private var cardBorderColor: Color {
+        if isSelected {
+            return Color.white.opacity(0.14)
+        }
+        if needsCompletionReview {
+            return completionReviewColor.opacity(hovering ? 0.44 : 0.32)
+        }
+        return .clear
+    }
+
+    private var completionReviewColor: Color {
+        Color(red: 0.32, green: 0.74, blue: 1.0)
+    }
+
+    private var mascotAnimated: Bool {
+        session.status != .idle || isSelected || hovering
+    }
+}
+
+private struct CompactSessionRenderSignature: Equatable {
+    let sessionId: String
+    let status: AgentStatus
+    let projectName: String
+    let sessionLabel: String?
+    let displaySessionId: String
+    let previewText: String?
+    let sourceLabel: String
+    let terminalName: String?
+    let interrupted: Bool
+    let isYoloMode: Bool
+    let needsCompletionReview: Bool
+    let ageText: String
+}
+
+private struct CompactSessionRow: View, Equatable {
+    var appState: AppState
+    let sessionId: String
+    let session: SessionSnapshot
+    let isSelected: Bool
+    let needsCompletionReview: Bool
+    @State private var hovering = false
+
+    static func == (lhs: CompactSessionRow, rhs: CompactSessionRow) -> Bool {
+        lhs.isSelected == rhs.isSelected
+            && lhs.renderSignature == rhs.renderSignature
+    }
+
+    private var renderSignature: CompactSessionRenderSignature {
+        CompactSessionRenderSignature(
+            sessionId: sessionId,
+            status: session.status,
+            projectName: session.projectDisplayName,
+            sessionLabel: session.sessionLabel,
+            displaySessionId: session.displaySessionId(sessionId: sessionId),
+            previewText: previewText,
+            sourceLabel: session.sourceLabel,
+            terminalName: session.terminalName,
+            interrupted: session.interrupted,
+            isYoloMode: session.isYoloMode == true,
+            needsCompletionReview: needsCompletionReview,
+            ageText: timeAgoText(session.lastActivity)
+        )
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            CompactSessionMascotBadge(
+                source: session.source,
+                status: session.status,
+                isSelected: isSelected,
+                isHovered: hovering,
+                animated: mascotAnimated
+            )
+            .padding(.top, 1)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .center, spacing: 8) {
+                    HStack(spacing: 4) {
+                        Text(session.projectDisplayName)
+                            .font(.system(size: 12.8, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(titleColor)
+                            .lineLimit(1)
+
+                        if let label = session.sessionLabel {
+                            Text("#\(label)")
+                                .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.56))
+                                .lineLimit(1)
+                        }
+
+                        Text("#\(shortSessionId(session.displaySessionId(sessionId: sessionId)))")
+                            .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.34))
+                            .fixedSize()
+                    }
+
+                    Spacer(minLength: 8)
+
+                    HStack(spacing: 4) {
+                        if session.interrupted {
+                            SessionTag("INT", color: Color(red: 1.0, green: 0.6, blue: 0.2))
+                        }
+                        if session.isYoloMode == true {
+                            SessionTag("YOLO", color: Color(red: 1.0, green: 0.35, blue: 0.35))
+                        }
+                        if needsCompletionReview {
+                            SessionTag(L10n.shared["completion_pending_review"], color: completionReviewColor)
+                        }
+                        SessionTag(timeAgoText(session.lastActivity))
+                        TerminalJumpButton(session: session, sessionId: sessionId, appState: appState)
+                    }
+                }
+
+                HStack(spacing: 6) {
+                    Text(session.sourceLabel)
+                        .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(sourceColor)
+
+                    if let previewText, !previewText.isEmpty {
+                        Text(previewText)
+                            .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.white.opacity(isSelected ? 0.72 : 0.54))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    } else if session.status != .idle {
+                        Text("thinking")
+                            .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.46))
+                            .lineLimit(1)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(backgroundColor)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(borderColor, lineWidth: 1)
+        )
+        .padding(.horizontal, 6)
+        .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) {
+                self.hovering = hovering
+            }
+        }
+        .onTapGesture {
+            guard !isSelected else { return }
+            _ = appState.focusSession(sessionId: sessionId)
+        }
+    }
+
+    private var previewText: String? {
+        if session.status != .idle, let tool = session.currentTool {
+            let value = (session.toolDescription ?? tool).trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? tool : value
+        }
+
+        if let assistant = session.lastAssistantMessage {
+            let cleaned = condensedMessagePreview(stripDirectives(assistant))
+            if !cleaned.isEmpty {
+                return cleaned
+            }
+        }
+
+        if let prompt = session.lastUserPrompt?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !prompt.isEmpty {
+            return prompt
+        }
+
+        if let lastMessage = session.recentMessages.last?.text {
+            let cleaned = condensedMessagePreview(stripDirectives(lastMessage))
+            return cleaned.isEmpty ? nil : cleaned
+        }
+
+        return nil
+    }
+
+    private var titleColor: Color {
+        if isSelected {
+            return .white.opacity(0.92)
+        }
+        if hovering {
+            return .white.opacity(0.82)
+        }
+        switch session.status {
+        case .processing, .running:
+            return Color(red: 0.3, green: 0.85, blue: 0.4).opacity(0.92)
+        case .waitingApproval, .waitingQuestion:
+            return Color(red: 1.0, green: 0.6, blue: 0.2).opacity(0.92)
+        case .idle:
+            return .white.opacity(0.74)
+        }
+    }
+
+    private var sourceColor: Color {
+        switch session.status {
+        case .processing, .running:
+            return Color(red: 0.3, green: 0.85, blue: 0.4).opacity(isSelected ? 0.9 : 0.78)
+        case .waitingApproval, .waitingQuestion:
+            return Color(red: 1.0, green: 0.6, blue: 0.2).opacity(0.88)
+        case .idle:
+            return .white.opacity(isSelected ? 0.5 : 0.4)
+        }
+    }
+
+    private var backgroundColor: Color {
+        if isSelected {
+            return Color.white.opacity(0.11)
+        }
+        if needsCompletionReview {
+            return hovering ? completionReviewColor.opacity(0.22) : completionReviewColor.opacity(0.16)
+        }
+        if hovering {
+            return Color.white.opacity(0.08)
+        }
+        return Color.white.opacity(0.035)
+    }
+
+    private var borderColor: Color {
+        if isSelected {
+            return Color.white.opacity(0.12)
+        }
+        if needsCompletionReview {
+            return completionReviewColor.opacity(hovering ? 0.42 : 0.30)
+        }
+        if hovering {
+            return Color.white.opacity(0.08)
+        }
+        return Color.clear
+    }
+
+    private var completionReviewColor: Color {
+        Color(red: 0.32, green: 0.74, blue: 1.0)
+    }
+
+    private var mascotAnimated: Bool {
+        session.status != .idle || isSelected || hovering
+    }
+}
+
+private struct CompactSessionMascotBadge: View {
+    let source: String
+    let status: AgentStatus
+    let isSelected: Bool
+    let isHovered: Bool
+    let animated: Bool
+
+    var body: some View {
+        ZStack(alignment: .bottomTrailing) {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(chipFill)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .strokeBorder(chipBorder, lineWidth: 1)
+                )
+                .frame(width: 26, height: 26)
+
+            MascotView(source: source, status: status, size: 18, animated: animated)
+                .frame(width: 22, height: 22)
+
+            Circle()
+                .fill(primaryTint)
+                .frame(width: 6, height: 6)
+                .overlay(
+                    Circle()
+                        .strokeBorder(Color.black.opacity(0.38), lineWidth: 0.8)
+                )
+                .offset(x: 1, y: 1)
+        }
+        .frame(width: 26, height: 26)
+    }
+
+    private var chipFill: Color {
+        if isSelected {
+            return Color.white.opacity(0.09)
+        }
+        if isHovered {
+            return Color.white.opacity(0.06)
+        }
+        return Color.white.opacity(0.03)
+    }
+
+    private var chipBorder: Color {
+        if isSelected {
+            return Color.white.opacity(0.12)
+        }
+        if isHovered {
+            return Color.white.opacity(0.08)
+        }
+        return Color.white.opacity(0.04)
+    }
+
+    private var primaryTint: Color {
+        switch status {
+        case .processing, .running:
+            return Color(red: 0.3, green: 0.85, blue: 0.4).opacity(isSelected || isHovered ? 1 : 0.8)
+        case .waitingApproval, .waitingQuestion:
+            return Color(red: 1.0, green: 0.6, blue: 0.2).opacity(isSelected || isHovered ? 1 : 0.82)
+        case .idle:
+            return Color.white.opacity(isSelected || isHovered ? 0.5 : 0.26)
+        }
+    }
+}
+
+private struct HoverApprovalActions: View {
+    let request: PermissionRequest
+    let onAllow: () -> Void
+    let onAlwaysAllow: () -> Void
+    let onDeny: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(request.event.toolDescription ?? request.event.toolName ?? "Approval needed")
+                .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.72))
+                .lineLimit(2)
+
+            HStack(spacing: 6) {
+                PixelButton(
+                    label: L10n.shared["deny"],
+                    fg: .white.opacity(0.95),
+                    bg: Color(red: 0.45, green: 0.12, blue: 0.12),
+                    border: Color(red: 0.7, green: 0.25, blue: 0.25),
+                    action: onDeny
+                )
+                PixelButton(
+                    label: L10n.shared["allow_once"],
+                    fg: .white.opacity(0.95),
+                    bg: Color(red: 0.16, green: 0.38, blue: 0.18),
+                    border: Color(red: 0.28, green: 0.62, blue: 0.32),
+                    action: onAllow
+                )
+                PixelButton(
+                    label: L10n.shared["always"],
+                    fg: .white.opacity(0.95),
+                    bg: Color(red: 0.14, green: 0.28, blue: 0.52),
+                    border: Color(red: 0.28, green: 0.48, blue: 0.82),
+                    action: onAlwaysAllow
+                )
+            }
+        }
+    }
+}
+
+private struct HoverQuestionActions: View {
+    let request: QuestionRequest
+    @Binding var textInput: String
+    let onAnswer: (String) -> Void
+    let onSkip: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(request.question.question)
+                .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.8))
+                .lineLimit(3)
+
+            if let options = request.question.options, !options.isEmpty {
+                VStack(spacing: 4) {
+                    ForEach(Array(options.enumerated()), id: \.offset) { idx, option in
+                        let desc = request.question.descriptions?.indices.contains(idx) == true ? request.question.descriptions?[idx] : nil
+                        Button {
+                            onAnswer(option)
+                        } label: {
+                            HStack(alignment: .top, spacing: 6) {
+                                Text("\(idx + 1).")
+                                    .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                                    .foregroundStyle(Color(red: 0.4, green: 0.7, blue: 1.0))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(option)
+                                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                        .foregroundStyle(.white.opacity(0.88))
+                                    if let desc, !desc.isEmpty {
+                                        Text(desc)
+                                            .font(.system(size: 9, design: .monospaced))
+                                            .foregroundStyle(.white.opacity(0.45))
+                                            .lineLimit(2)
+                                    }
+                                }
+                                Spacer()
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                            .background(Color.white.opacity(0.04))
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            } else {
+                HStack(spacing: 6) {
+                    Text(">")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color(red: 0.3, green: 0.85, blue: 0.4))
+                    TextField(L10n.shared["type_answer"], text: $textInput)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .foregroundStyle(.white)
+                        .onSubmit {
+                            let answer = textInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !answer.isEmpty {
+                                onAnswer(answer)
+                            }
+                        }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(Color.white.opacity(0.05))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+            }
+
+            HStack(spacing: 6) {
+                PixelButton(
+                    label: L10n.shared["skip"],
+                    fg: .white.opacity(0.6),
+                    bg: Color.white.opacity(0.06),
+                    border: Color.white.opacity(0.12),
+                    action: onSkip
+                )
+                if request.question.options == nil || request.question.options?.isEmpty == true {
+                    PixelButton(
+                        label: L10n.shared["submit"],
+                        fg: .white.opacity(0.95),
+                        bg: Color(red: 0.16, green: 0.38, blue: 0.18),
+                        border: Color(red: 0.28, green: 0.62, blue: 0.32),
+                        action: {
+                            let answer = textInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !answer.isEmpty {
+                                onAnswer(answer)
+                            }
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Claude Logo (official sunburst from simple-icons, viewBox 0 0 24 24)
+
+private struct ClaudeLogo: View {
+    var size: CGFloat = 22
+    private static let color = Color(red: 0.85, green: 0.47, blue: 0.34) // #D97757
+
+    // Official Claude logo SVG path (source: simple-icons)
+    fileprivate static let svgPath = "m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z"
+
+    var body: some View {
+        ClaudeLogoShape()
+            .fill(Self.color)
+            .frame(width: size, height: size)
+    }
+}
+
+private struct ClaudeLogoShape: Shape {
+    private static let basePath: Path = ClaudeLogoShape.parseSVGPath(ClaudeLogo.svgPath)
+
+    func path(in rect: CGRect) -> Path {
+        let scale = min(rect.width, rect.height) / 24.0
+        let transform = CGAffineTransform(scaleX: scale, y: scale)
+            .concatenating(CGAffineTransform(translationX: rect.minX, y: rect.minY))
+        return Self.basePath.applying(transform)
+    }
+
+    // Minimal SVG path parser for m/l/h/v/c/z commands
+    private static func parseSVGPath(_ d: String) -> Path {
+        var path = Path()
+        var x: CGFloat = 0, y: CGFloat = 0
+        var i = d.startIndex
+        var cmd: Character = "m"
+
+        func skipWS() {
+            while i < d.endIndex && (d[i] == " " || d[i] == ",") { i = d.index(after: i) }
+        }
+
+        func peekNum() -> Bool {
+            guard i < d.endIndex else { return false }
+            let c = d[i]
+            return c == "-" || c == "." || c.isNumber
+        }
+
+        func num() -> CGFloat {
+            skipWS()
+            var s = ""
+            if i < d.endIndex && d[i] == "-" { s.append(d[i]); i = d.index(after: i) }
+            var hasDot = false
+            while i < d.endIndex {
+                let c = d[i]
+                if c == "." {
+                    if hasDot { break }
+                    hasDot = true; s.append(c); i = d.index(after: i)
+                } else if c.isNumber {
+                    s.append(c); i = d.index(after: i)
+                } else { break }
+            }
+            return CGFloat(Double(s) ?? 0)
+        }
+
+        while i < d.endIndex {
+            skipWS()
+            guard i < d.endIndex else { break }
+            let c = d[i]
+            if c.isLetter {
+                cmd = c; i = d.index(after: i)
+            }
+
+            switch cmd {
+            case "m":
+                let dx = num(), dy = num(); x += dx; y += dy
+                path.move(to: CGPoint(x: x, y: y))
+                cmd = "l" // subsequent coords are implicit lineTo
+            case "M":
+                x = num(); y = num()
+                path.move(to: CGPoint(x: x, y: y))
+                cmd = "L"
+            case "l":
+                let dx = num(), dy = num(); x += dx; y += dy
+                path.addLine(to: CGPoint(x: x, y: y))
+            case "L":
+                x = num(); y = num()
+                path.addLine(to: CGPoint(x: x, y: y))
+            case "h":
+                x += num(); path.addLine(to: CGPoint(x: x, y: y))
+            case "H":
+                x = num(); path.addLine(to: CGPoint(x: x, y: y))
+            case "v":
+                y += num(); path.addLine(to: CGPoint(x: x, y: y))
+            case "V":
+                y = num(); path.addLine(to: CGPoint(x: x, y: y))
+            case "c":
+                let dx1 = num(), dy1 = num(), dx2 = num(), dy2 = num(), dx = num(), dy = num()
+                path.addCurve(to: CGPoint(x: x+dx, y: y+dy),
+                              control1: CGPoint(x: x+dx1, y: y+dy1),
+                              control2: CGPoint(x: x+dx2, y: y+dy2))
+                x += dx; y += dy
+            case "C":
+                let x1 = num(), y1 = num(), x2 = num(), y2 = num()
+                x = num(); y = num()
+                path.addCurve(to: CGPoint(x: x, y: y),
+                              control1: CGPoint(x: x1, y: y1),
+                              control2: CGPoint(x: x2, y: y2))
+            case "Z", "z":
+                path.closeSubpath()
+            default:
+                i = d.index(after: i)
+            }
+
+            // Handle repeated implicit commands
+            skipWS()
+            if i < d.endIndex && peekNum() && "mlhvcMLHVC".contains(cmd) {
+                continue
+            }
+        }
+        return path
+    }
+}
+
+// MARK: - Notch Panel Shape (inverse radius at top, regular radius at bottom)
+
+private struct NotchPanelShape: Shape {
+    var topExtension: CGFloat
+    var bottomRadius: CGFloat
+    /// Fixed minimum height — NOT animated, prevents spring overshoot from exposing the notch
+    var minHeight: CGFloat = 0
+
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(topExtension, bottomRadius) }
+        set {
+            topExtension = newValue.first
+            bottomRadius = newValue.second
+        }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let ext = topExtension
+        let maxY = max(rect.maxY, rect.minY + minHeight)
+        let br = min(bottomRadius, rect.width / 4, (maxY - rect.minY) / 2)
+        // Smoothness factor for continuous-curvature corners (superellipse approximation).
+        // 0.5523 = perfect circle; higher values tighten the curve for an Apple squircle feel.
+        let k: CGFloat = 0.62
+
+        var p = Path()
+        // Top edge (extends into notch area via wings)
+        p.move(to: CGPoint(x: rect.minX - ext, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX + ext, y: rect.minY))
+        // Right shoulder: cubic bezier tangent to top line (horizontal) and right side (vertical)
+        p.addCurve(
+            to: CGPoint(x: rect.maxX, y: rect.minY + ext),
+            control1: CGPoint(x: rect.maxX + ext * 0.35, y: rect.minY),
+            control2: CGPoint(x: rect.maxX, y: rect.minY + ext * 0.35)
+        )
+        // Right side down to bottom-right corner
+        p.addLine(to: CGPoint(x: rect.maxX, y: maxY - br))
+        // Bottom-right: cubic bezier for continuous-curvature corner
+        p.addCurve(
+            to: CGPoint(x: rect.maxX - br, y: maxY),
+            control1: CGPoint(x: rect.maxX, y: maxY - br * (1 - k)),
+            control2: CGPoint(x: rect.maxX - br * (1 - k), y: maxY)
+        )
+        // Bottom edge
+        p.addLine(to: CGPoint(x: rect.minX + br, y: maxY))
+        // Bottom-left: cubic bezier for continuous-curvature corner
+        p.addCurve(
+            to: CGPoint(x: rect.minX, y: maxY - br),
+            control1: CGPoint(x: rect.minX + br * (1 - k), y: maxY),
+            control2: CGPoint(x: rect.minX, y: maxY - br * (1 - k))
+        )
+        // Left side up to shoulder
+        p.addLine(to: CGPoint(x: rect.minX, y: rect.minY + ext))
+        // Left shoulder: cubic bezier tangent to left side (vertical) and top line (horizontal)
+        p.addCurve(
+            to: CGPoint(x: rect.minX - ext, y: rect.minY),
+            control1: CGPoint(x: rect.minX, y: rect.minY + ext * 0.35),
+            control2: CGPoint(x: rect.minX - ext * 0.35, y: rect.minY)
+        )
+        p.closeSubpath()
+        return p
+    }
+}
+
+/// Collapsed single-line row for idle sessions >15 min
+private struct TerminalJumpButton: View {
+    let session: SessionSnapshot
+    let sessionId: String
+    let appState: AppState
+    @State private var hovering = false
+
+    private let green = Color(red: 0.3, green: 0.85, blue: 0.4)
+
+    /// Known bundle IDs for IDE/app sources
+    private static let sourceBundleIds: [String: String] = [
+        "cursor": "com.todesktop.230313mzl4w4u92",
+        "qoder": "com.qoder.ide",
+        "droid": "com.factory.app",
+        "codebuddy": "com.tencent.codebuddy",
+        "codex": "com.openai.codex",
+        "opencode": "ai.opencode.desktop",
+    ]
+
+    private static var termIconCache: [String: NSImage] = [:]
+
+    private var termIcon: NSImage? {
+        let bid = session.termBundleId ?? Self.sourceBundleIds[session.source]
+        guard let bid else { return nil }
+        if let cached = Self.termIconCache[bid] { return cached }
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bid)
+        else { return nil }
+        let icon = NSWorkspace.shared.icon(forFile: url.path)
+        Self.termIconCache[bid] = icon
+        return icon
+    }
+
+    var body: some View {
+        Button {
+            appState.jumpToSession(sessionId)
+        } label: {
+            HStack(spacing: 4) {
+                if let icon = termIcon {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .frame(width: 13, height: 13)
+                }
+                if let term = session.terminalName {
+                    Text(term)
+                        .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                        .foregroundStyle(green)
+                }
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundStyle(green.opacity(hovering ? 1.0 : 0.5))
+                    .offset(x: hovering ? 2 : 0)
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(green.opacity(hovering ? 0.18 : 0.08))
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { h in
+            withAnimation(.easeOut(duration: 0.15)) { hovering = h }
+        }
+    }
+}
+
+// MARK: - Pixel Text (5×7 dot matrix style)
+
+private struct PixelText: View {
+    let text: String
+    let color: Color
+    var pixelSize: CGFloat = 2
+
+    private static let W = 5  // glyph width
+    private static let H = 7  // glyph height
+
+    // 5×7 bitmaps — each row is 5 bits, 7 rows per glyph
+    private static let glyphs: [Character: [UInt8]] = [
+        "0": [0,1,1,1,0, 1,0,0,1,1, 1,0,1,0,1, 1,1,0,0,1, 0,1,1,1,0, 0,0,0,0,0, 0,0,0,0,0],
+        "1": [0,0,1,0,0, 0,1,1,0,0, 0,0,1,0,0, 0,0,1,0,0, 0,1,1,1,0, 0,0,0,0,0, 0,0,0,0,0],
+        "2": [0,1,1,1,0, 1,0,0,0,1, 0,0,1,1,0, 0,1,0,0,0, 1,1,1,1,1, 0,0,0,0,0, 0,0,0,0,0],
+        "3": [0,1,1,1,0, 1,0,0,0,1, 0,0,1,1,0, 1,0,0,0,1, 0,1,1,1,0, 0,0,0,0,0, 0,0,0,0,0],
+        "4": [0,0,0,1,0, 0,0,1,1,0, 0,1,0,1,0, 1,1,1,1,1, 0,0,0,1,0, 0,0,0,0,0, 0,0,0,0,0],
+        "5": [1,1,1,1,1, 1,0,0,0,0, 1,1,1,1,0, 0,0,0,0,1, 1,1,1,1,0, 0,0,0,0,0, 0,0,0,0,0],
+        "6": [0,1,1,1,0, 1,0,0,0,0, 1,1,1,1,0, 1,0,0,0,1, 0,1,1,1,0, 0,0,0,0,0, 0,0,0,0,0],
+        "7": [1,1,1,1,1, 0,0,0,0,1, 0,0,0,1,0, 0,0,1,0,0, 0,0,1,0,0, 0,0,0,0,0, 0,0,0,0,0],
+        "8": [0,1,1,1,0, 1,0,0,0,1, 0,1,1,1,0, 1,0,0,0,1, 0,1,1,1,0, 0,0,0,0,0, 0,0,0,0,0],
+        "9": [0,1,1,1,0, 1,0,0,0,1, 0,1,1,1,1, 0,0,0,0,1, 0,1,1,1,0, 0,0,0,0,0, 0,0,0,0,0],
+        "A": [0,0,1,0,0, 0,1,0,1,0, 1,0,0,0,1, 1,1,1,1,1, 1,0,0,0,1, 0,0,0,0,0, 0,0,0,0,0],
+        "B": [1,1,1,1,0, 1,0,0,0,1, 1,1,1,1,0, 1,0,0,0,1, 1,1,1,1,0, 0,0,0,0,0, 0,0,0,0,0],
+        "C": [0,1,1,1,0, 1,0,0,0,1, 1,0,0,0,0, 1,0,0,0,1, 0,1,1,1,0, 0,0,0,0,0, 0,0,0,0,0],
+        "D": [1,1,1,1,0, 1,0,0,0,1, 1,0,0,0,1, 1,0,0,0,1, 1,1,1,1,0, 0,0,0,0,0, 0,0,0,0,0],
+        "E": [1,1,1,1,1, 1,0,0,0,0, 1,1,1,1,0, 1,0,0,0,0, 1,1,1,1,1, 0,0,0,0,0, 0,0,0,0,0],
+        "F": [1,1,1,1,1, 1,0,0,0,0, 1,1,1,1,0, 1,0,0,0,0, 1,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0],
+        "G": [0,1,1,1,0, 1,0,0,0,0, 1,0,0,1,1, 1,0,0,0,1, 0,1,1,1,0, 0,0,0,0,0, 0,0,0,0,0],
+        "H": [1,0,0,0,1, 1,0,0,0,1, 1,1,1,1,1, 1,0,0,0,1, 1,0,0,0,1, 0,0,0,0,0, 0,0,0,0,0],
+        "I": [0,1,1,1,0, 0,0,1,0,0, 0,0,1,0,0, 0,0,1,0,0, 0,1,1,1,0, 0,0,0,0,0, 0,0,0,0,0],
+        "K": [1,0,0,1,0, 1,0,1,0,0, 1,1,0,0,0, 1,0,1,0,0, 1,0,0,1,0, 0,0,0,0,0, 0,0,0,0,0],
+        "L": [1,0,0,0,0, 1,0,0,0,0, 1,0,0,0,0, 1,0,0,0,0, 1,1,1,1,1, 0,0,0,0,0, 0,0,0,0,0],
+        "N": [1,0,0,0,1, 1,1,0,0,1, 1,0,1,0,1, 1,0,0,1,1, 1,0,0,0,1, 0,0,0,0,0, 0,0,0,0,0],
+        "O": [0,1,1,1,0, 1,0,0,0,1, 1,0,0,0,1, 1,0,0,0,1, 0,1,1,1,0, 0,0,0,0,0, 0,0,0,0,0],
+        "P": [1,1,1,1,0, 1,0,0,0,1, 1,1,1,1,0, 1,0,0,0,0, 1,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0],
+        "R": [1,1,1,1,0, 1,0,0,0,1, 1,1,1,1,0, 1,0,0,1,0, 1,0,0,0,1, 0,0,0,0,0, 0,0,0,0,0],
+        "S": [0,1,1,1,1, 1,0,0,0,0, 0,1,1,1,0, 0,0,0,0,1, 1,1,1,1,0, 0,0,0,0,0, 0,0,0,0,0],
+        "T": [1,1,1,1,1, 0,0,1,0,0, 0,0,1,0,0, 0,0,1,0,0, 0,0,1,0,0, 0,0,0,0,0, 0,0,0,0,0],
+        "U": [1,0,0,0,1, 1,0,0,0,1, 1,0,0,0,1, 1,0,0,0,1, 0,1,1,1,0, 0,0,0,0,0, 0,0,0,0,0],
+        "W": [1,0,0,0,1, 1,0,0,0,1, 1,0,1,0,1, 1,0,1,0,1, 0,1,0,1,0, 0,0,0,0,0, 0,0,0,0,0],
+        "X": [1,0,0,0,1, 0,1,0,1,0, 0,0,1,0,0, 0,1,0,1,0, 1,0,0,0,1, 0,0,0,0,0, 0,0,0,0,0],
+        "/": [0,0,0,0,1, 0,0,0,1,0, 0,0,1,0,0, 0,1,0,0,0, 1,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0],
+        "-": [0,0,0,0,0, 0,0,0,0,0, 1,1,1,1,1, 0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0],
+        " ": [0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0],
+    ]
+
+    var body: some View {
+        let chars = Array(text.uppercased())
+        let px = pixelSize
+        let gap: CGFloat = px
+
+        Canvas { ctx, size in
+            var xOff: CGFloat = 0
+            for ch in chars {
+                guard let glyph = Self.glyphs[ch] else {
+                    xOff += 3 * px
+                    continue
+                }
+                for row in 0..<Self.H {
+                    for col in 0..<Self.W {
+                        if glyph[row * Self.W + col] == 1 {
+                            let rect = CGRect(x: xOff + CGFloat(col) * px, y: CGFloat(row) * px, width: px, height: px)
+                            ctx.fill(Path(rect), with: .color(color))
+                        }
+                    }
+                }
+                xOff += CGFloat(Self.W) * px + gap
+            }
+        }
+        .frame(width: charWidth(chars.count), height: CGFloat(Self.H) * pixelSize)
+    }
+
+    private func charWidth(_ count: Int) -> CGFloat {
+        guard count > 0 else { return 0 }
+        let px = pixelSize
+        return CGFloat(count) * (CGFloat(Self.W) * px + px) - px
+    }
+}
+
+private struct Line: Shape {
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: rect.minX, y: rect.midY))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+        return p
+    }
+}
+
+private extension Color {
+    init(hex: String) {
+        let sanitized = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        guard sanitized.count == 6, let value = Int(sanitized, radix: 16) else {
+            self = .white
+            return
+        }
+
+        let red = Double((value >> 16) & 0xFF) / 255
+        let green = Double((value >> 8) & 0xFF) / 255
+        let blue = Double(value & 0xFF) / 255
+        self = Color(red: red, green: green, blue: blue)
+    }
+}
+
+// MARK: - Shared Helpers
+
+private let cliIconFiles: [String: String] = [
+    "claude": "claude",
+    "codex": "codex",
+    "gemini": "gemini",
+    "cursor": "cursor",
+    "copilot": "copilot",
+    "qoder": "qoder",
+    "droid": "factory",
+    "codebuddy": "codebuddy",
+    "opencode": "opencode",
+]
+
+private var cliIconCache: [String: NSImage] = [:]
+
+func cliIcon(source: String, size: CGFloat = 16) -> NSImage? {
+    let key = "\(source)_\(Int(size))"
+    if let cached = cliIconCache[key] { return cached }
+    guard let filename = cliIconFiles[source],
+          let url = AppResourceBundle.bundle.url(forResource: filename, withExtension: "png", subdirectory: "Resources/cli-icons"),
+          let image = NSImage(contentsOf: url)
+    else { return nil }
+    image.size = NSSize(width: size, height: size)
+    cliIconCache[key] = image
+    return image
+}
+
+private struct SessionTag: View {
+    let text: String
+    var color: Color = .white.opacity(0.7)
+
+    init(_ text: String, color: Color = .white.opacity(0.7)) {
+        self.text = text
+        self.color = color
+    }
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+            .foregroundStyle(color)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(color.opacity(0.12))
+            )
+    }
+}
+
+// MARK: - Typing Indicator (three bouncing dots)
+
+private struct TypingIndicator: View {
+    let fontSize: CGFloat
+    var label: String? = nil
+    var bright: Bool = false
+    var color: Color? = nil
+    @State private var phase: CGFloat = -60
+
+    var body: some View {
+        if let label {
+            let baseColor: Color = color ?? .white
+            let baseOpacity: Double = bright ? 0.6 : 0.35
+            let peakOpacity: Double = bright ? 0.8 : 0.5
+            let midOpacity: Double = bright ? 0.5 : 0.3
+            let bandWidth: CGFloat = bright ? 80 : 60
+            let duration: Double = 2.5
+            let endPhase: CGFloat = bright ? 100 : 80
+            let startPhase: CGFloat = bright ? -80 : -60
+
+            Text(label)
+                .font(.system(size: fontSize, design: .monospaced))
+                .foregroundStyle(baseColor.opacity(baseOpacity))
+                .overlay(
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: 0),
+                            .init(color: .white.opacity(midOpacity), location: bright ? 0.35 : 0.4),
+                            .init(color: .white.opacity(peakOpacity), location: 0.5),
+                            .init(color: .white.opacity(midOpacity), location: bright ? 0.65 : 0.6),
+                            .init(color: .clear, location: 1),
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                    .frame(width: bandWidth)
+                    .offset(x: phase)
+                    .mask(
+                        Text(label)
+                            .font(.system(size: fontSize, design: .monospaced))
+                    )
+                )
+                .onAppear {
+                    phase = startPhase
+                    withAnimation(.easeInOut(duration: duration).repeatForever(autoreverses: false)) {
+                        phase = endPhase
+                    }
+                }
+                .onDisappear { phase = startPhase }
+        }
+    }
+}
+
+// MARK: - Mini Agent Icon (8-bit robot head)
+
+struct MiniAgentIcon: View {
+    let active: Bool
+    var size: CGFloat = 12
+
+    // 0=empty, 1=body, 2=eye, 3=antenna tip, 4=highlight, 5=shadow
+    private let grid: [[Int]] = [
+        [0, 0, 0, 3, 0, 0, 0],  // antenna tip (glows)
+        [0, 0, 0, 1, 0, 0, 0],  // antenna stem
+        [0, 4, 1, 1, 1, 5, 0],  // head top
+        [0, 1, 2, 1, 2, 1, 0],  // eyes
+        [0, 1, 1, 1, 1, 1, 0],  // face
+        [0, 5, 1, 0, 1, 5, 0],  // mouth
+        [0, 0, 1, 0, 1, 0, 0],  // legs
+    ]
+
+    var body: some View {
+        let base = active ? Color.green : Color.gray
+        let bright = active ? Color(red: 0.5, green: 1.0, blue: 0.5) : Color(white: 0.7)
+        let dark = active ? Color(red: 0.1, green: 0.5, blue: 0.15) : Color(white: 0.35)
+        let eye = active ? Color.white : Color(white: 0.85)
+        let glow = active ? Color(red: 0.4, green: 1.0, blue: 0.4) : Color(white: 0.6)
+
+        Canvas { ctx, sz in
+            let px = sz.width / 7
+            for row in 0..<7 {
+                for col in 0..<7 {
+                    let v = grid[row][col]
+                    guard v != 0 else { continue }
+                    let color: Color = switch v {
+                    case 2: eye
+                    case 3: glow
+                    case 4: bright
+                    case 5: dark
+                    default: base
+                    }
+                    ctx.fill(
+                        Path(CGRect(x: CGFloat(col) * px, y: CGFloat(row) * px, width: px, height: px)),
+                        with: .color(color)
+                    )
+                }
+            }
+        }
+        .frame(width: size, height: size)
+        .shadow(color: active ? .green.opacity(0.4) : .clear, radius: 2)
+    }
+}
+
+// MARK: - Shared Helpers
+
+/// Inline markdown rendering (bold, italic, code, links)
+private var markdownCache: [String: AttributedString] = [:]
+private let markdownCacheLimit = 128
+
+private func inlineMarkdown(_ text: String) -> AttributedString {
+    if let cached = markdownCache[text] { return cached }
+    let result: AttributedString
+    if let attr = try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
+        result = attr
+    } else {
+        result = AttributedString(text)
+    }
+    if markdownCache.count >= markdownCacheLimit {
+        markdownCache.removeAll(keepingCapacity: true)
+    }
+    markdownCache[text] = result
+    return result
+}
+
+/// Generate a short session ID with better disambiguation.
+private func shortSessionId(_ id: String) -> String {
+    let clean = id.replacingOccurrences(of: "-", with: "")
+    if clean.count >= 8 {
+        return String(clean.suffix(4))
+    }
+    return String(id.prefix(4))
+}
+
+/// Strip internal directives (::code-comment{}, ::git-*{}, etc.) from message text
+/// so they don't leak into the UI preview.
+private func stripDirectives(_ text: String) -> String {
+    // Match ::directive-name{...} patterns (may span multiple lines)
+    // Use a simple approach: remove lines that start with ::word{ or are continuation of a directive
+    var result: [String] = []
+    var inDirective = false
+    var braceDepth = 0
+
+    for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+        if inDirective {
+            for ch in line {
+                if ch == "{" { braceDepth += 1 }
+                if ch == "}" { braceDepth -= 1 }
+            }
+            if braceDepth <= 0 {
+                inDirective = false
+                braceDepth = 0
+            }
+            continue
+        }
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasPrefix("::") && trimmed.contains("{") {
+            // Count braces to handle single-line vs multi-line directives
+            braceDepth = 0
+            for ch in line {
+                if ch == "{" { braceDepth += 1 }
+                if ch == "}" { braceDepth -= 1 }
+            }
+            if braceDepth > 0 {
+                inDirective = true
+            }
+            // Either way, skip this line
+            continue
+        }
+        result.append(String(line))
+    }
+
+    let cleaned = result.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    return cleaned
+}
+
+private func condensedMessagePreview(_ text: String) -> String {
+    text
+        .components(separatedBy: "\n")
+        .map { $0.trimmingCharacters(in: .whitespaces) }
+        .reduce(into: [String]()) { result, line in
+            if line.isEmpty && (result.last?.isEmpty ?? true) {
+                return
+            }
+            result.append(line)
+        }
+        .joined(separator: "\n")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func timeAgoText(_ date: Date) -> String {
+    let seconds = Int(-date.timeIntervalSinceNow)
+    if seconds < 60 {
+        return "<1m"
+    }
+    if seconds < 3600 {
+        return "\(seconds / 60)m"
+    }
+    if seconds < 86_400 {
+        return "\(seconds / 3600)h"
+    }
+    return "\(seconds / 86_400)d"
+}

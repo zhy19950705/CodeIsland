@@ -14,11 +14,13 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$REPO_ROOT/.build"
 RELEASE_DIR="$BUILD_DIR/release"
 STAGING_DIR="$BUILD_DIR/dmg-staging"
+DMG_CONTENT_DIR="$BUILD_DIR/dmg-contents"
 APP_NAME="SuperIsland"
-APP_EXECUTABLE="CodeIsland"
+APP_EXECUTABLE="SuperIsland"
 APP_DIR="$STAGING_DIR/${APP_NAME}.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 OUTPUT_DMG="$BUILD_DIR/${APP_NAME}.dmg"
+FALLBACK_ICON_PATH="$REPO_ROOT/Sources/SuperIsland/Resources/AppIcon.icns"
 
 echo "==> Building ${APP_NAME} ${VERSION} (universal)"
 
@@ -64,50 +66,60 @@ if ! xcrun actool \
     echo "warning: actool failed, continuing without compiled icon assets"
 fi
 
+# Fall back to the prebuilt icns so the app still has an icon when actool is unavailable.
+if [ ! -f "$CONTENTS_DIR/Resources/AppIcon.icns" ] && [ -f "$FALLBACK_ICON_PATH" ]; then
+    cp "$FALLBACK_ICON_PATH" "$CONTENTS_DIR/Resources/AppIcon.icns"
+fi
+
 # Copy SPM resource bundles at .app root where Bundle.module expects them
-for bundle in "$BUILD_DIR"/*/release/*.bundle; do
-    if [ -e "$bundle" ]; then
-        cp -R "$bundle" "$APP_DIR/"
+RESOURCE_BUNDLE=""
+for candidate in \
+    "$BUILD_DIR"/arm64-apple-macosx/release/SuperIsland_SuperIsland.bundle \
+    "$BUILD_DIR"/x86_64-apple-macosx/release/SuperIsland_SuperIsland.bundle \
+    "$BUILD_DIR"/arm64-apple-macosx/release/SuperIsland_SuperIsland.bundle \
+    "$BUILD_DIR"/x86_64-apple-macosx/release/SuperIsland_SuperIsland.bundle; do
+    if [ -d "$candidate" ]; then
+        RESOURCE_BUNDLE="$candidate"
         break
     fi
 done
 
+if [ -n "$RESOURCE_BUNDLE" ]; then
+    cp -R "$RESOURCE_BUNDLE" "$CONTENTS_DIR/Resources/"
+fi
+
 echo "==> App bundle assembled at $APP_DIR"
 
 # ---------------------------------------------------------------------------
-# Code signing requires an Apple Developer account ($99/year).
-# Without Developer ID signing + notarization, macOS Gatekeeper will block
-# apps downloaded from the internet ("damaged" / "unidentified developer").
-#
-# Workaround for users: run  xattr -cr /Applications/SuperIsland.app
-# Or install via Homebrew:  brew install zhy19950705/tap/superisland
-#
-# To enable signing, uncomment below and set your credentials:
+# Ad-hoc sign the helper and bundle so macOS can launch the locally built app.
+# This is not a replacement for Developer ID signing / notarization, but it
+# avoids launch constraint failures on newer macOS versions.
 # ---------------------------------------------------------------------------
-# TEAM_ID="YOUR_TEAM_ID"
-# SIGNING_IDENTITY="Developer ID Application: Your Name (${TEAM_ID})"
-#
-# codesign --deep --force --options runtime \
-#     --entitlements "$REPO_ROOT/SuperIsland.entitlements" \
-#     --sign "$SIGNING_IDENTITY" \
-#     "$APP_DIR"
-# ---------------------------------------------------------------------------
+echo "==> Ad-hoc code signing"
+
+if ! codesign --force --sign - "$CONTENTS_DIR/Helpers/superisland-bridge"; then
+    echo "warning: helper codesign failed, continuing with unsigned helper"
+fi
+
+if ! codesign --deep --force --sign - "$APP_DIR"; then
+    echo "warning: app bundle codesign failed, continuing with unsigned app bundle"
+fi
 
 echo "==> Creating DMG"
 
 # Remove previous DMG if exists
 rm -f "$OUTPUT_DMG"
+rm -rf "$DMG_CONTENT_DIR"
+mkdir -p "$DMG_CONTENT_DIR"
+cp -R "$APP_DIR" "$DMG_CONTENT_DIR/"
+ln -s /Applications "$DMG_CONTENT_DIR/Applications"
 
-create-dmg \
-    --volname "${APP_NAME} ${VERSION}" \
-    --window-pos 200 120 \
-    --window-size 600 400 \
-    --icon-size 100 \
-    --icon "${APP_NAME}.app" 175 190 \
-    --hide-extension "${APP_NAME}.app" \
-    --app-drop-link 425 190 \
-    "$OUTPUT_DMG" \
-    "$STAGING_DIR/"
+hdiutil create \
+    -volname "${APP_NAME} ${VERSION}" \
+    -srcfolder "$DMG_CONTENT_DIR" \
+    -ov \
+    -format UDZO \
+    "$OUTPUT_DMG"
 
 # ---------------------------------------------------------------------------
 # Notarization (uncomment after Developer ID signing)

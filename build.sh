@@ -2,12 +2,13 @@
 set -e
 
 APP_NAME="SuperIsland"
-APP_EXECUTABLE="CodeIsland"
+APP_EXECUTABLE="SuperIsland"
 BUILD_DIR=".build/release"
 APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
 ICON_CATALOG="Assets.xcassets"
 ICON_SOURCE="AppIcon.icon"
 ICON_INFO_PLIST=".build/AppIcon.partial.plist"
+FALLBACK_ICON_PATH="Sources/SuperIsland/Resources/AppIcon.icns"
 
 echo "Building $APP_NAME (universal)..."
 swift build -c release --arch arm64
@@ -46,13 +47,27 @@ if ! xcrun actool \
     echo "warning: actool failed, continuing without compiled icon assets"
 fi
 
-# Copy SPM resource bundles — place at .app root where Bundle.module expects them
-for bundle in .build/*/release/*.bundle; do
-    if [ -e "$bundle" ]; then
-        cp -R "$bundle" "$APP_BUNDLE/"
+# Fall back to the prebuilt icns so the app still has an icon when actool is unavailable.
+if [ ! -f "$APP_BUNDLE/Contents/Resources/AppIcon.icns" ] && [ -f "$FALLBACK_ICON_PATH" ]; then
+    cp "$FALLBACK_ICON_PATH" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
+fi
+
+# Copy the SPM resource bundle into Contents/Resources so the app can be signed.
+RESOURCE_BUNDLE=""
+for candidate in \
+    .build/arm64-apple-macosx/release/SuperIsland_SuperIsland.bundle \
+    .build/x86_64-apple-macosx/release/SuperIsland_SuperIsland.bundle \
+    .build/arm64-apple-macosx/release/SuperIsland_SuperIsland.bundle \
+    .build/x86_64-apple-macosx/release/SuperIsland_SuperIsland.bundle; do
+    if [ -d "$candidate" ]; then
+        RESOURCE_BUNDLE="$candidate"
         break
     fi
 done
+
+if [ -n "$RESOURCE_BUNDLE" ]; then
+    cp -R "$RESOURCE_BUNDLE" "$APP_BUNDLE/Contents/Resources/"
+fi
 
 echo "Ad-hoc code signing..."
 if ! codesign --force --sign - "$APP_BUNDLE/Contents/Helpers/superisland-bridge"; then

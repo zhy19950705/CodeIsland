@@ -1,6 +1,6 @@
 <h1 align="center">
-  <img src="logo.png" width="48" height="48" alt="CodeIsland Logo" valign="middle">&nbsp;
-  CodeIsland
+  <img src="logo.png" width="48" height="48" alt="SuperIsland Logo" valign="middle">&nbsp;
+  SuperIsland
 </h1>
 <p align="center">
   <b>Real-time AI coding agent status panel for macOS Dynamic Island (Notch)</b><br>
@@ -14,12 +14,12 @@
 ---
 
 <p align="center">
-  <img src="docs/images/notch-panel.png" width="700" alt="CodeIsland Panel Preview">
+  <img src="docs/images/notch-panel.png" width="700" alt="SuperIsland Panel Preview">
 </p>
 
-## What is CodeIsland?
+## What is SuperIsland?
 
-CodeIsland lives in your MacBook's notch area and shows you what your AI coding agents are doing — in real time. No more switching windows to check if Claude is waiting for approval or if Codex finished its task.
+SuperIsland lives in your MacBook's notch area and shows you what your AI coding agents are doing — in real time. No more switching windows to check if Claude is waiting for approval or if Codex finished its task.
 
 It connects to **9 AI coding tools** via Unix socket IPC, displaying session status, tool calls, permission requests, and more — all in a compact, pixel-art styled panel.
 
@@ -42,15 +42,15 @@ It connects to **9 AI coding tools** via Unix socket IPC, displaying session sta
 
 | | Tool | Events | Jump | Status |
 |:---:|------|--------|------|--------|
-| <img src="docs/images/mascots/claude.gif" width="28"> | <img src="Sources/CodeIsland/Resources/cli-icons/claude.png" width="16"> Claude Code | 13 | Terminal tab | Full |
-| <img src="docs/images/mascots/codex.gif" width="28"> | <img src="Sources/CodeIsland/Resources/cli-icons/codex.png" width="16"> Codex | 3 | Terminal | Basic |
-| <img src="docs/images/mascots/gemini.gif" width="28"> | <img src="Sources/CodeIsland/Resources/cli-icons/gemini.png" width="16"> Gemini CLI | 6 | Terminal | Full |
-| <img src="docs/images/mascots/cursor.gif" width="28"> | <img src="Sources/CodeIsland/Resources/cli-icons/cursor.png" width="16"> Cursor | 10 | IDE | Full |
-| <img src="docs/images/mascots/copilot.gif" width="28"> | <img src="Sources/CodeIsland/Resources/cli-icons/copilot.png" width="16"> Copilot | 6 | Terminal | Full |
-| <img src="docs/images/mascots/qoder.gif" width="28"> | <img src="Sources/CodeIsland/Resources/cli-icons/qoder.png" width="16"> Qoder | 10 | IDE | Full |
-| <img src="docs/images/mascots/factory.gif" width="28"> | <img src="Sources/CodeIsland/Resources/cli-icons/factory.png" width="16"> Factory | 10 | IDE | Full |
-| <img src="docs/images/mascots/codebuddy.gif" width="28"> | <img src="Sources/CodeIsland/Resources/cli-icons/codebuddy.png" width="16"> CodeBuddy | 10 | APP/Terminal | Full |
-| <img src="docs/images/mascots/opencode.gif" width="28"> | <img src="Sources/CodeIsland/Resources/cli-icons/opencode.png" width="16"> OpenCode | All | APP/Terminal | Full |
+| <img src="docs/images/mascots/claude.gif" width="28"> | <img src="Sources/SuperIsland/Resources/cli-icons/claude.png" width="16"> Claude Code | 13 | Terminal tab | Full |
+| <img src="docs/images/mascots/codex.gif" width="28"> | <img src="Sources/SuperIsland/Resources/cli-icons/codex.png" width="16"> Codex | 3 | Terminal | Basic |
+| <img src="docs/images/mascots/gemini.gif" width="28"> | <img src="Sources/SuperIsland/Resources/cli-icons/gemini.png" width="16"> Gemini CLI | 6 | Terminal | Full |
+| <img src="docs/images/mascots/cursor.gif" width="28"> | <img src="Sources/SuperIsland/Resources/cli-icons/cursor.png" width="16"> Cursor | 10 | IDE | Full |
+| <img src="docs/images/mascots/copilot.gif" width="28"> | <img src="Sources/SuperIsland/Resources/cli-icons/copilot.png" width="16"> Copilot | 6 | Terminal | Full |
+| <img src="docs/images/mascots/qoder.gif" width="28"> | <img src="Sources/SuperIsland/Resources/cli-icons/qoder.png" width="16"> Qoder | 10 | IDE | Full |
+| <img src="docs/images/mascots/factory.gif" width="28"> | <img src="Sources/SuperIsland/Resources/cli-icons/factory.png" width="16"> Factory | 10 | IDE | Full |
+| <img src="docs/images/mascots/codebuddy.gif" width="28"> | <img src="Sources/SuperIsland/Resources/cli-icons/codebuddy.png" width="16"> CodeBuddy | 10 | APP/Terminal | Full |
+| <img src="docs/images/mascots/opencode.gif" width="28"> | <img src="Sources/SuperIsland/Resources/cli-icons/opencode.png" width="16"> OpenCode | All | APP/Terminal | Full |
 
 ## Installation
 
@@ -58,34 +58,35 @@ It connects to **9 AI coding tools** via Unix socket IPC, displaying session sta
 
 ```bash
 brew tap wxtsky/tap
-brew install --cask codeisland
+brew install --cask superisland
 ```
 
 ### Manual Download
 
-1. Go to [Releases](https://github.com/wxtsky/CodeIsland/releases)
-2. Download `CodeIsland.dmg`
-3. Open the DMG and drag `CodeIsland.app` to your Applications folder
-4. Launch CodeIsland — it will automatically install hooks for all detected AI tools
+1. Download the latest [SuperIsland.dmg](https://guandata-autotest-report.oss-cn-hangzhou.aliyuncs.com/cdn/superIsland/SuperIsland.dmg) from OSS
+2. Open the DMG and drag `SuperIsland.app` to your Applications folder
+3. Launch SuperIsland — it will automatically install hooks for all detected AI tools
 
 > **Note:** On first launch, macOS may show a security warning. Go to **System Settings → Privacy & Security** and click **Open Anyway**.
+
+In-app update checks also read the OSS manifest at `https://guandata-autotest-report.oss-cn-hangzhou.aliyuncs.com/cdn/superIsland/version.json`.
 
 ### Build from Source
 
 Requires **macOS 14+** and **Swift 5.9+**.
 
 ```bash
-git clone https://github.com/wxtsky/CodeIsland.git
-cd CodeIsland
+git clone https://github.com/wxtsky/SuperIsland.git
+cd SuperIsland
 
 # Development (debug build + launch)
-swift build && open .build/debug/CodeIsland.app
+swift build && open .build/debug/SuperIsland.app
 # or
-swift run CodeIsland
+swift run SuperIsland
 
 # Release (universal binary: Apple Silicon + Intel)
 ./build.sh
-open .build/release/CodeIsland.app
+open .build/release/SuperIsland.app
 ```
 
 ## How It Works
@@ -93,19 +94,19 @@ open .build/release/CodeIsland.app
 ```
 AI Tool (Claude/Codex/Gemini/Cursor/Copilot/...)
   → Hook event triggered
-    → codeisland-bridge (native Swift binary, ~86KB)
-      → Unix socket → /tmp/codeisland-<uid>.sock
-        → CodeIsland app receives event
+    → superisland-bridge (native Swift binary, ~86KB)
+      → Unix socket → /tmp/superisland-<uid>.sock
+        → SuperIsland app receives event
           → Updates UI in real time
 ```
 
-CodeIsland installs lightweight hooks into each AI tool's config. When the tool triggers an event (session start, tool call, permission request, etc.), the hook sends a JSON message through a Unix socket. CodeIsland listens on this socket and updates the notch panel instantly.
+SuperIsland installs lightweight hooks into each AI tool's config. When the tool triggers an event (session start, tool call, permission request, etc.), the hook sends a JSON message through a Unix socket. SuperIsland listens on this socket and updates the notch panel instantly.
 
 For **OpenCode**, a JS plugin connects directly to the socket — no bridge binary needed.
 
 ## Settings
 
-CodeIsland provides a 7-tab settings panel:
+SuperIsland provides a 7-tab settings panel:
 
 - **General** — Language, launch at login, display selection
 - **Behavior** — Auto-hide, smart suppress, session cleanup
@@ -126,11 +127,11 @@ This project was inspired by [claude-island](https://github.com/farouqaldori/cla
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=wxtsky%2FCodeIsland&type=date&legend=bottom-right">
+<a href="https://www.star-history.com/?repos=wxtsky%2FSuperIsland&type=date&legend=bottom-right">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=wxtsky/CodeIsland&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=wxtsky/CodeIsland&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=wxtsky/CodeIsland&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=wxtsky/SuperIsland&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=wxtsky/SuperIsland&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=wxtsky/SuperIsland&type=date&legend=top-left" />
  </picture>
 </a>
 

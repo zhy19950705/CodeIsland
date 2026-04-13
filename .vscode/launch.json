@@ -4,47 +4,7 @@
             "type": "swift",
             "request": "launch",
             "args": [],
-            "cwd": "${workspaceFolder:CodeIsland}",
-            "name": "Debug codeisland-bridge",
-            "target": "codeisland-bridge",
-            "configuration": "debug",
-            "preLaunchTask": "swift: Build Debug codeisland-bridge"
-        },
-        {
-            "type": "swift",
-            "request": "launch",
-            "args": [],
-            "cwd": "${workspaceFolder:CodeIsland}",
-            "name": "Release codeisland-bridge",
-            "target": "codeisland-bridge",
-            "configuration": "release",
-            "preLaunchTask": "swift: Build Release codeisland-bridge"
-        },
-        {
-            "type": "swift",
-            "request": "launch",
-            "args": [],
-            "cwd": "${workspaceFolder:CodeIsland}",
-            "name": "Debug CodeIsland",
-            "target": "CodeIsland",
-            "configuration": "debug",
-            "preLaunchTask": "swift: Build Debug CodeIsland"
-        },
-        {
-            "type": "swift",
-            "request": "launch",
-            "args": [],
-            "cwd": "${workspaceFolder:CodeIsland}",
-            "name": "Release CodeIsland",
-            "target": "CodeIsland",
-            "configuration": "release",
-            "preLaunchTask": "swift: Build Release CodeIsland"
-        },
-        {
-            "type": "swift",
-            "request": "launch",
-            "args": [],
-            "cwd": "${workspaceFolder:CodeIsland}",
+            "cwd": "${workspaceFolder}",
             "name": "Debug superisland-bridge",
             "target": "superisland-bridge",
             "configuration": "debug",
@@ -54,11 +14,31 @@
             "type": "swift",
             "request": "launch",
             "args": [],
-            "cwd": "${workspaceFolder:CodeIsland}",
+            "cwd": "${workspaceFolder}",
             "name": "Release superisland-bridge",
             "target": "superisland-bridge",
             "configuration": "release",
             "preLaunchTask": "swift: Build Release superisland-bridge"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "name": "Debug SuperIsland",
+            "target": "SuperIsland",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug SuperIsland"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "name": "Release SuperIsland",
+            "target": "SuperIsland",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release SuperIsland"
         }
     ]
 }

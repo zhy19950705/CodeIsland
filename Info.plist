@@ -2,9 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleExecutable</key>
-	<string>CodeIsland</string>
 	<key>CFBundleDisplayName</key>
+	<string>SuperIsland</string>
+	<key>CFBundleExecutable</key>
 	<string>SuperIsland</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
@@ -16,6 +16,8 @@
 	<string>SuperIsland</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.10</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -27,10 +29,8 @@
 			</array>
 		</dict>
 	</array>
-	<key>CFBundleShortVersionString</key>
-	<string>1.0.6</string>
 	<key>CFBundleVersion</key>
-	<string>1.0.6</string>
+	<string>0.0.10</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAppTransportSecurity</key>

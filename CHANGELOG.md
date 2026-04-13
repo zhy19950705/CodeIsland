@@ -35,7 +35,7 @@
 ## [v1.0.7] - 2026-04-07
 
 ### English
-- Add Homebrew Cask distribution support (`brew install --cask codeisland`)
+- Add Homebrew Cask distribution support (`brew install --cask superisland`)
 - Add in-app auto-update: download, install and relaunch without leaving the app
 - Add "Check for Updates" button in Settings → About
 - Detect Homebrew installs and suggest `brew upgrade` instead of auto-update
@@ -46,7 +46,7 @@
 - Hide project name in tool status area when no tool is running
 
 ### 中文
-- 新增 Homebrew Cask 分发支持（`brew install --cask codeisland`）
+- 新增 Homebrew Cask 分发支持（`brew install --cask superisland`）
 - 新增 App 内自动更新：下载、安装并重启，无需离开应用
 - 设置 → 关于页面新增"检查更新"按钮
 - 检测 Homebrew 安装并建议使用 `brew upgrade` 更新

@@ -6,31 +6,31 @@ let package = Package(
     platforms: [.macOS(.v14)],
     targets: [
         .target(
-            name: "CodeIslandCore",
-            path: "Sources/CodeIslandCore"
+            name: "SuperIslandCore",
+            path: "Sources/SuperIslandCore"
         ),
         .executableTarget(
-            name: "CodeIsland",
-            dependencies: ["CodeIslandCore"],
-            path: "Sources/CodeIsland",
+            name: "SuperIsland",
+            dependencies: ["SuperIslandCore"],
+            path: "Sources/SuperIsland",
             resources: [
                 .copy("Resources")
             ]
         ),
         .executableTarget(
             name: "superisland-bridge",
-            dependencies: ["CodeIslandCore"],
-            path: "Sources/CodeIslandBridge"
+            dependencies: ["SuperIslandCore"],
+            path: "Sources/SuperIslandBridge"
         ),
         .testTarget(
-            name: "CodeIslandCoreTests",
-            dependencies: ["CodeIslandCore"],
-            path: "Tests/CodeIslandCoreTests"
+            name: "SuperIslandCoreTests",
+            dependencies: ["SuperIslandCore"],
+            path: "Tests/SuperIslandCoreTests"
         ),
         .testTarget(
-            name: "CodeIslandTests",
-            dependencies: ["CodeIsland"],
-            path: "Tests/CodeIslandTests"
+            name: "SuperIslandTests",
+            dependencies: ["SuperIsland"],
+            path: "Tests/SuperIslandTests"
         ),
     ]
 )

@@ -6,6 +6,7 @@ struct SkillsPage: View {
     @StateObject private var viewModel = SkillPlatformViewModel()
     @State private var selectedTab: SkillsPageTab = .library
     @State private var skillPendingDeletion: InstalledSkill?
+    @State private var installedSearchQuery = ""
 
     var body: some View {
         VStack(spacing: 12) {
@@ -110,12 +111,28 @@ struct SkillsPage: View {
         viewModel.agentSnapshots.filter { $0.state == .conflict }
     }
 
+    private var filteredSharedSkills: [InstalledSkill] {
+        filteredSkills(from: sharedSkills)
+    }
+
+    private var filteredExternalSkills: [InstalledSkill] {
+        filteredSkills(from: externalSkills)
+    }
+
+    private var installedSearchSummary: String {
+        String(
+            format: l10n["skills_installed_search_results"],
+            filteredSharedSkills.count + filteredExternalSkills.count,
+            sharedSkills.count + externalSkills.count
+        )
+    }
+
     @ViewBuilder
     private var librarySections: some View {
-        installSection
+        installedSearchSection
         installedSkillsSection
 
-        if !externalSkills.isEmpty {
+        if !filteredExternalSkills.isEmpty || !installedSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             externalSkillsSection
         }
 
@@ -123,6 +140,30 @@ struct SkillsPage: View {
             Text(l10n["skills_security_hint"])
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private var installedSearchSection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    TextField(l10n["skills_installed_search_placeholder"], text: $installedSearchQuery)
+                        .textFieldStyle(.roundedBorder)
+
+                    if !installedSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Button {
+                            installedSearchQuery = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.tertiary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                Text(installedSearchSummary)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+            }
         }
     }
 
@@ -168,7 +209,6 @@ struct SkillsPage: View {
     private var marketplaceSections: some View {
         Section(l10n["skills_marketplace"]) {
             Picker(l10n["skills_marketplace_source"], selection: $viewModel.marketplaceSource) {
-                Text(l10n["skills_marketplace_source_all"]).tag(SkillMarketplaceSource.all)
                 Text(l10n["skills_marketplace_source_skills_sh"]).tag(SkillMarketplaceSource.skillsSh)
                 Text(l10n["skills_marketplace_source_mayidata"]).tag(SkillMarketplaceSource.mayidata)
             }
@@ -177,7 +217,7 @@ struct SkillsPage: View {
                 Task { await viewModel.refreshMarketplace() }
             }
 
-            if viewModel.marketplaceSource == .all || viewModel.marketplaceSource == .skillsSh {
+            if viewModel.marketplaceSource == .skillsSh {
                 Picker(l10n["skills_marketplace_skills_sh_board"], selection: $viewModel.skillsShLeaderboard) {
                     Text(l10n["skills_marketplace_board_hot"]).tag(SkillsShLeaderboardKind.hot)
                     Text(l10n["skills_marketplace_board_trending"]).tag(SkillsShLeaderboardKind.trending)
@@ -298,38 +338,6 @@ struct SkillsPage: View {
         }
     }
 
-    private var installSection: some View {
-        Section(l10n["skills_install"]) {
-            HStack(spacing: 8) {
-                TextField(l10n["skills_install_placeholder"], text: $viewModel.installReference)
-                    .textFieldStyle(.roundedBorder)
-
-                Button {
-                    viewModel.installFromReference()
-                } label: {
-                    HStack(spacing: 6) {
-                        Text(l10n["skills_install_from_github"])
-                        if viewModel.isInstallingReference {
-                            ProgressView()
-                                .controlSize(.small)
-                        }
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(viewModel.isInstallingReference || viewModel.installReference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-
-            Button(l10n["skills_import_folder"]) {
-                viewModel.importFolder()
-            }
-            .buttonStyle(.bordered)
-
-            Text(l10n["skills_install_hint"])
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
     private var installedSkillsSection: some View {
         Section(l10n["skills_installed"]) {
             if !sharedSkills.filter(\.isUpdatable).isEmpty {
@@ -350,8 +358,11 @@ struct SkillsPage: View {
             if sharedSkills.isEmpty {
                 Text(l10n["skills_empty"])
                     .foregroundStyle(.secondary)
+            } else if filteredSharedSkills.isEmpty {
+                Text(l10n["skills_installed_search_empty"])
+                    .foregroundStyle(.secondary)
             } else {
-                ForEach(sharedSkills) { skill in
+                ForEach(filteredSharedSkills) { skill in
                     InstalledSkillRow(skill: skill) {
                         viewModel.reveal(skill.directoryURL)
                     } onPreview: {
@@ -374,24 +385,29 @@ struct SkillsPage: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            if externalSkills.contains(where: \.isAdoptableToSharedLibrary) {
+            if filteredExternalSkills.contains(where: \.isAdoptableToSharedLibrary) {
                 Button(l10n["skills_adopt_all"]) {
                     viewModel.adoptAllExternalSkills()
                 }
                 .buttonStyle(.borderedProminent)
             }
 
-            ForEach(externalSkills) { skill in
-                InstalledSkillRow(skill: skill) {
-                    viewModel.reveal(skill.directoryURL)
-                } onPreview: {
-                    viewModel.preview(skill)
-                } onUpdate: {
-                    viewModel.update(skill)
-                } onAdopt: {
-                    viewModel.adopt(skill)
-                } onDelete: {
-                    skillPendingDeletion = skill
+            if filteredExternalSkills.isEmpty {
+                Text(l10n["skills_installed_search_empty"])
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(filteredExternalSkills) { skill in
+                    InstalledSkillRow(skill: skill) {
+                        viewModel.reveal(skill.directoryURL)
+                    } onPreview: {
+                        viewModel.preview(skill)
+                    } onUpdate: {
+                        viewModel.update(skill)
+                    } onAdopt: {
+                        viewModel.adopt(skill)
+                    } onDelete: {
+                        skillPendingDeletion = skill
+                    }
                 }
             }
         }
@@ -409,6 +425,51 @@ struct SkillsPage: View {
             items.append(String(format: l10n["skills_health_link_conflicts"], conflictAgentSnapshots.count))
         }
         return items
+    }
+
+    private func filteredSkills(from skills: [InstalledSkill]) -> [InstalledSkill] {
+        let normalizedQuery = normalizeInstalledSearchText(installedSearchQuery)
+        guard !normalizedQuery.isEmpty else { return skills }
+
+        let tokens = normalizedQuery.split(separator: " ").map(String.init)
+        return skills.filter { skill in
+            let haystack = [
+                skill.name,
+                skill.description,
+                skill.version ?? "",
+                skill.author ?? "",
+                skill.folderName,
+                skill.directoryURL.path,
+                skill.sourceMetadata?.repoFullName ?? "",
+                skill.sourceMetadata?.sourcePath ?? "",
+                storageSearchTitle(for: skill.storageKind),
+            ]
+            .map(normalizeInstalledSearchText)
+            .joined(separator: " ")
+
+            return tokens.allSatisfy { haystack.contains($0) }
+        }
+    }
+
+    private func storageSearchTitle(for storageKind: SkillStorageKind) -> String {
+        switch storageKind {
+        case .shared:
+            return l10n["skills_storage_shared"]
+        case .legacyAgent:
+            return l10n["skills_storage_legacy"]
+        case let .agent(agent):
+            return agent.title
+        }
+    }
+
+    private func normalizeInstalledSearchText(_ text: String) -> String {
+        let folded = text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        let scalars = folded.unicodeScalars.map { scalar -> UnicodeScalar in
+            CharacterSet.alphanumerics.contains(scalar) ? scalar : " "
+        }
+        return String(String.UnicodeScalarView(scalars))
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
     }
 }
 
@@ -532,85 +593,101 @@ private struct InstalledSkillRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "doc.text.fill")
-                .frame(width: 20)
-                .foregroundStyle(Color.accentColor)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "doc.text.fill")
+                    .frame(width: 20)
+                    .foregroundStyle(Color.accentColor)
 
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
                     Text(skill.name)
-                    storageBadge
-                    sourceBadge
-                }
+                        .font(.system(size: 16, weight: .semibold))
 
-                Text(skill.description)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            storageBadge
+                            sourceBadge
+                        }
+                    }
 
-                HStack(spacing: 8) {
-                    if let version = skill.version {
-                        Text("v\(version)")
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.tertiary)
-                    }
-                    if let author = skill.author {
-                        Text(author)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.tertiary)
-                    }
+                    Text(skill.description)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+
                     Text(skill.directoryURL.deletingLastPathComponent().path)
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    Text(skill.folderName)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.tertiary)
-                    if let modifiedLabel {
-                        Text(modifiedLabel)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.tertiary)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            if let version = skill.version {
+                                metadataTag("v\(version)", monospaced: true)
+                            }
+                            if let author = skill.author {
+                                metadataTag(author)
+                            }
+                            metadataTag(skill.folderName, monospaced: true)
+                            if let modifiedLabel {
+                                metadataTag(modifiedLabel)
+                            }
+                        }
                     }
                 }
             }
 
-            Spacer(minLength: 12)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    actionButton(l10n["open_folder"]) {
+                        onReveal()
+                    }
 
-            HStack(spacing: 8) {
-                Button(l10n["open_folder"]) {
-                    onReveal()
-                }
-                .buttonStyle(.bordered)
+                    actionButton(l10n["preview"]) {
+                        onPreview()
+                    }
 
-                Button(l10n["preview"]) {
-                    onPreview()
-                }
-                .buttonStyle(.bordered)
+                    if skill.isUpdatable {
+                        actionButton(l10n["skills_update"]) {
+                            onUpdate()
+                        }
+                    }
 
-                if skill.isUpdatable {
-                    Button(l10n["skills_update"]) {
-                        onUpdate()
+                    if skill.isAdoptableToSharedLibrary {
+                        Button(l10n["skills_adopt"]) {
+                            onAdopt()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+
+                    Button(role: .destructive) {
+                        onDelete()
+                    } label: {
+                        Text(l10n["delete"])
                     }
                     .buttonStyle(.bordered)
                 }
-
-                if skill.isAdoptableToSharedLibrary {
-                    Button(l10n["skills_adopt"]) {
-                        onAdopt()
-                    }
-                    .buttonStyle(.borderedProminent)
-                }
-
-                Button(role: .destructive) {
-                    onDelete()
-                } label: {
-                    Text(l10n["delete"])
-                }
-                .buttonStyle(.bordered)
             }
+            .padding(.leading, 30)
         }
+    }
+
+    private func actionButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .buttonStyle(.bordered)
+    }
+
+    private func metadataTag(_ title: String, monospaced: Bool = false) -> some View {
+        Text(title)
+            .font(.system(size: 11, design: monospaced ? .monospaced : .default))
+            .foregroundStyle(.tertiary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color(nsColor: .controlBackgroundColor))
+            )
     }
 
     @ViewBuilder
@@ -704,86 +781,87 @@ private struct SkillMarketplaceRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: sourceIcon)
-                .frame(width: 20)
-                .foregroundStyle(sourceColor)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: sourceIcon)
+                    .frame(width: 20)
+                    .foregroundStyle(sourceColor)
 
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
                     Text(item.title)
-                    Text(sourceTitle)
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(sourceColor)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Capsule(style: .continuous).fill(sourceColor.opacity(0.12)))
-                    if let stars = item.stars {
-                        Text("★ \(stars)")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.orange)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Capsule(style: .continuous).fill(Color.orange.opacity(0.12)))
-                    }
-                    if let installs = item.installsText {
-                        Text(installs)
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.green)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Capsule(style: .continuous).fill(Color.green.opacity(0.12)))
-                    }
-                }
+                        .font(.system(size: 16, weight: .semibold))
 
-                Text(item.description)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-
-                let tags = Array(item.topics.prefix(4))
-                if !tags.isEmpty || item.language != nil || !item.repoFullName.isEmpty {
-                    let meta = [item.repoFullName] + [item.language].compactMap { $0 }
-                    Text((meta.filter { !$0.isEmpty } + tags).joined(separator: " · "))
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
-                }
-
-                if let updatedLabel {
-                    Text(String(format: l10n["skills_marketplace_updated"], updatedLabel))
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
-                }
-            }
-
-            Spacer(minLength: 12)
-
-            HStack(spacing: 8) {
-                Button(l10n["open"]) {
-                    onOpen()
-                }
-                .buttonStyle(.bordered)
-
-                Button(l10n["preview"]) {
-                    onPreview()
-                }
-                .buttonStyle(.bordered)
-
-                Button {
-                    onInstall()
-                } label: {
-                    HStack(spacing: 6) {
-                        if isInstalling {
-                            ProgressView()
-                                .controlSize(.small)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            marketplaceBadge(sourceTitle, color: sourceColor)
+                            if let stars = item.stars {
+                                marketplaceBadge("★ \(stars)", color: .orange)
+                            }
+                            if let installs = item.installsText {
+                                marketplaceBadge(installs, color: .green)
+                            }
                         }
-                        Text(isInstalling ? "Installing…" : l10n["install"])
+                    }
+
+                    Text(item.description)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+
+                    let tags = Array(item.topics.prefix(4))
+                    if !tags.isEmpty || item.language != nil || !item.repoFullName.isEmpty {
+                        let meta = [item.repoFullName] + [item.language].compactMap { $0 }
+                        Text((meta.filter { !$0.isEmpty } + tags).joined(separator: " · "))
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+                    }
+
+                    if let updatedLabel {
+                        Text(String(format: l10n["skills_marketplace_updated"], updatedLabel))
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
                     }
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(!item.canInstallDirectly || isInstalling)
             }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    Button(l10n["open"]) {
+                        onOpen()
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button(l10n["preview"]) {
+                        onPreview()
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button {
+                        onInstall()
+                    } label: {
+                        HStack(spacing: 6) {
+                            if isInstalling {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+                            Text(isInstalling ? "Installing…" : l10n["install"])
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!item.canInstallDirectly || isInstalling)
+                }
+            }
+            .padding(.leading, 30)
         }
+    }
+
+    private func marketplaceBadge(_ title: String, color: Color) -> some View {
+        Text(title)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(color)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Capsule(style: .continuous).fill(color.opacity(0.12)))
     }
 }
 

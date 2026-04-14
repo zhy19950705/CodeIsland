@@ -1348,6 +1348,7 @@ final class AppState {
         // Extract metadata so blocking-first sessions have cwd, source, cliPid, terminal info
         extractMetadata(into: &sessions, sessionId: sessionId, event: event)
         tryMonitorSession(sessionId)
+        acknowledgePendingCompletionReview(for: sessionId)
 
         // Clear any pending questions for THIS session (mutually exclusive within a session)
         drainQuestions(forSession: sessionId)
@@ -1441,6 +1442,7 @@ final class AppState {
         }
         extractMetadata(into: &sessions, sessionId: sessionId, event: event)
         tryMonitorSession(sessionId)
+        acknowledgePendingCompletionReview(for: sessionId)
 
         guard let question = QuestionPayload.from(event: event) else {
             continuation.resume(returning: Data("{}".utf8))
@@ -1475,6 +1477,7 @@ final class AppState {
         }
         extractMetadata(into: &sessions, sessionId: sessionId, event: event)
         tryMonitorSession(sessionId)
+        acknowledgePendingCompletionReview(for: sessionId)
 
         let payload: QuestionPayload
         if let questions = event.toolInput?["questions"] as? [[String: Any]],

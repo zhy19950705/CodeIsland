@@ -84,7 +84,7 @@ enum SettingsKey {
 
 struct SettingsDefaults {
     static let displayChoice = "auto"
-    static let displayMode = DisplayMode.notch.rawValue
+    static let displayMode = DisplayMode.menuBar.rawValue
     static let menuBarShowDetail = false
     static let screenSelectionMode = "automatic"
     static let allowHorizontalDrag = false
@@ -194,7 +194,7 @@ class SettingsManager {
         get {
             guard let rawValue = defaults.string(forKey: SettingsKey.displayMode),
                   let mode = DisplayMode(rawValue: rawValue) else {
-                return .notch
+                return .menuBar
             }
             return mode
         }

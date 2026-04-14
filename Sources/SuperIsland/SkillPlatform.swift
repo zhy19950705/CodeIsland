@@ -2028,8 +2028,8 @@ final class SkillPlatformViewModel: ObservableObject {
     @Published private(set) var marketplaceItems: [SkillMarketplaceItem] = []
     @Published var installReference = ""
     @Published var marketplaceQuery = ""
-    @Published var marketplaceSource: SkillMarketplaceSource = .all
-    @Published var skillsShLeaderboard: SkillsShLeaderboardKind = .hot
+    @Published var marketplaceSource: SkillMarketplaceSource = .skillsSh
+    @Published var skillsShLeaderboard: SkillsShLeaderboardKind = .trending
     @Published var isRefreshingLocal = false
     @Published var isRefreshingMarketplace = false
     @Published var isInstallingReference = false

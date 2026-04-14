@@ -58,4 +58,53 @@ final class AppStateSessionListPresentationTests: XCTestCase {
         let reordered = appState.sessionListPresentation(groupingMode: "all")
         XCTAssertEqual(reordered.groups.first?.ids, ["waiting", "selected", "running"])
     }
+
+    func testSessionListPresentationPrioritizesPendingReviewAheadOfOtherIdleSessions() {
+        let appState = AppState()
+
+        appState.handleEvent(
+            HookEvent(
+                eventName: "Stop",
+                sessionId: "pending-review",
+                toolName: nil,
+                toolInput: nil,
+                rawJSON: [
+                    "_source": "claude",
+                    "cwd": "/tmp/review",
+                    "message": "Review me.",
+                ]
+            )
+        )
+
+        appState.handleEvent(
+            HookEvent(
+                eventName: "Stop",
+                sessionId: "stale-idle",
+                toolName: nil,
+                toolInput: nil,
+                rawJSON: [
+                    "_source": "codex",
+                    "cwd": "/tmp/idle",
+                    "message": "Older idle session.",
+                ]
+            )
+        )
+
+        appState.focusSession(sessionId: "stale-idle")
+        appState.handleEvent(
+            HookEvent(
+                eventName: "Notification",
+                sessionId: "stale-idle",
+                toolName: nil,
+                toolInput: nil,
+                rawJSON: ["_source": "codex"]
+            )
+        )
+
+        appState.sessions["stale-idle"]?.lastActivity = Date(timeIntervalSince1970: 300)
+        appState.sessions["pending-review"]?.lastActivity = Date(timeIntervalSince1970: 200)
+
+        let snapshot = appState.sessionListPresentation(groupingMode: "all")
+        XCTAssertEqual(snapshot.groups.first?.ids, ["pending-review", "stale-idle"])
+    }
 }

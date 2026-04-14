@@ -7,6 +7,7 @@ import Darwin
 enum UsageProviderSource: String, Codable, CaseIterable, Identifiable, Sendable {
     case claude
     case codex
+    case cursor
 
     var id: String { rawValue }
 
@@ -14,6 +15,7 @@ enum UsageProviderSource: String, Codable, CaseIterable, Identifiable, Sendable 
         switch self {
         case .claude: "Claude"
         case .codex: "Codex"
+        case .cursor: "Cursor"
         }
     }
 
@@ -21,6 +23,16 @@ enum UsageProviderSource: String, Codable, CaseIterable, Identifiable, Sendable 
         switch self {
         case .claude: 0
         case .codex: 1
+        case .cursor: 2
+        }
+    }
+
+    var displaysUsedPercentage: Bool {
+        switch self {
+        case .claude, .cursor:
+            true
+        case .codex:
+            false
         }
     }
 }
@@ -84,8 +96,11 @@ struct UsageProviderSnapshot: Codable, Hashable, Sendable, Identifiable {
     var summary: String?
     var monthly: UsageMonthlyStat?
     var history: [UsageHistoryRangeSnapshot]?
+    var showsQuotaBadge: Bool?
 
     var id: String { source.rawValue }
+
+    var hasQuotaMetrics: Bool { showsQuotaBadge ?? true }
 }
 
 struct UsageSnapshot: Codable, Hashable, Sendable {
@@ -177,6 +192,7 @@ enum UsageMonitorLaunchAgentError: LocalizedError {
 final class UsageMonitorLaunchAgentManager {
     private let fileManager: FileManager
     private let label = "com.superisland.usage-monitor"
+    private let collectionInterval: TimeInterval = 300
 
     init(fileManager: FileManager = .default) {
         self.fileManager = fileManager
@@ -218,7 +234,7 @@ final class UsageMonitorLaunchAgentManager {
             if service.isLoaded {
                 return UsageMonitorLaunchAgentSnapshot(
                     state: .enabled,
-                    detail: "Collects Claude/Codex usage every 15 minutes",
+                    detail: enabledDetail,
                     plistPath: plistURL.path
                 )
             }
@@ -227,7 +243,7 @@ final class UsageMonitorLaunchAgentManager {
         if isLoaded() {
             return UsageMonitorLaunchAgentSnapshot(
                 state: .enabled,
-                detail: "Collects Claude/Codex usage every 15 minutes",
+                detail: enabledDetail,
                 plistPath: plistURL.path
             )
         }
@@ -349,6 +365,11 @@ final class UsageMonitorLaunchAgentManager {
         }
     }
 
+    private var enabledDetail: String {
+        let minutes = Int(collectionInterval / 60)
+        return "Collects Claude/Codex usage every \(minutes) minutes"
+    }
+
     private func writePlist(at plistURL: URL, executableURL: URL) throws {
         let logsDirectory = fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent(".superisland", isDirectory: true)
@@ -365,7 +386,7 @@ final class UsageMonitorLaunchAgentManager {
             ],
             "WorkingDirectory": fileManager.homeDirectoryForCurrentUser.path,
             "RunAtLoad": true,
-            "StartInterval": 900,
+            "StartInterval": Int(collectionInterval),
             "StandardOutPath": logsDirectory.appendingPathComponent("usage-monitor.log").path,
             "StandardErrorPath": logsDirectory.appendingPathComponent("usage-monitor.error.log").path,
         ]

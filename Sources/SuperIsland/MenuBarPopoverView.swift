@@ -183,13 +183,19 @@ private struct MenuBarUsageBadge: View {
         HStack(spacing: 6) {
             MenuBarUsageWindowBadge(
                 title: provider.primary.label,
-                remainingPercentage: provider.remainingPercentage(for: provider.primary),
-                tintHex: provider.primary.tintHex
+                percentage: provider.source.displaysUsedPercentage
+                    ? provider.usedPercentage(for: provider.primary)
+                    : provider.remainingPercentage(for: provider.primary),
+                tintHex: provider.primary.tintHex,
+                isUsed: provider.source.displaysUsedPercentage
             )
             MenuBarUsageWindowBadge(
                 title: provider.secondary.label,
-                remainingPercentage: provider.remainingPercentage(for: provider.secondary),
-                tintHex: provider.secondary.tintHex
+                percentage: provider.source.displaysUsedPercentage
+                    ? provider.usedPercentage(for: provider.secondary)
+                    : provider.remainingPercentage(for: provider.secondary),
+                tintHex: provider.secondary.tintHex,
+                isUsed: provider.source.displaysUsedPercentage
             )
         }
         .help(helpText)
@@ -207,14 +213,19 @@ private struct MenuBarUsageBadge: View {
     }
 
     private func line(for window: UsageWindowStat) -> String {
-        "\(provider.source.title) \(window.label) \(L10n.shared["usage_remaining"]): \(provider.remainingPercentage(for: window))% · \(window.detail)"
+        let label = provider.source.displaysUsedPercentage ? L10n.shared["usage_used"] : L10n.shared["usage_remaining"]
+        let percentage = provider.source.displaysUsedPercentage
+            ? provider.usedPercentage(for: window)
+            : provider.remainingPercentage(for: window)
+        return "\(provider.source.title) \(window.label) \(label): \(percentage)% · \(window.detail)"
     }
 }
 
 private struct MenuBarUsageWindowBadge: View {
     let title: String
-    let remainingPercentage: Int
+    let percentage: Int
     let tintHex: String
+    let isUsed: Bool
 
     private var tint: Color { menuBarColor(hex: tintHex) }
 
@@ -222,9 +233,9 @@ private struct MenuBarUsageWindowBadge: View {
         HStack(spacing: 3) {
             Text(title.uppercased())
                 .foregroundStyle(.white.opacity(0.55))
-            Text(L10n.shared["usage_remaining"].uppercased())
+            Text((isUsed ? L10n.shared["usage_used"] : L10n.shared["usage_remaining"]).uppercased())
                 .foregroundStyle(.white.opacity(0.75))
-            Text("\(remainingPercentage)%")
+            Text("\(percentage)%")
                 .foregroundStyle(tint)
         }
         .font(.system(size: 9.5, weight: .semibold, design: .monospaced))

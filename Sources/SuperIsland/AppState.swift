@@ -35,6 +35,12 @@ private struct CachedSessionListPresentation {
     let snapshot: SessionListPresentationSnapshot
 }
 
+private struct RestoredSessionCandidate {
+    let sessionId: String
+    let snapshot: SessionSnapshot
+    let shouldAttachProcessMonitor: Bool
+}
+
 @MainActor
 @Observable
 final class AppState {
@@ -223,6 +229,7 @@ final class AppState {
             }
         }
         for (sessionId, pid) in orphaned {
+            Self.debugLog("cleanupIdleSessions: remove orphaned session \(sessionId) pid=\(pid)")
             kill(pid, SIGTERM)
             removeSession(sessionId)
         }
@@ -237,24 +244,22 @@ final class AppState {
             let shouldReset = (session.status == .processing && session.currentTool == nil && elapsed > 60)
                 || elapsed > 180
             if shouldReset {
+                Self.debugLog("cleanupIdleSessions: reset stuck session \(key) status=\(String(describing: session.status)) elapsed=\(elapsed)")
                 sessions[key]?.status = .idle
                 sessions[key]?.currentTool = nil
                 sessions[key]?.toolDescription = nil
             }
         }
 
-        // 3. Remove idle sessions past timeout (user setting, or 10 min default for no-monitor sessions)
+        // 3. Remove idle sessions past the user-configured timeout.
         let userTimeout = SettingsManager.shared.sessionTimeout
-        let defaultStaleMinutes = 10  // for sessions without process monitor
+        Self.debugLog("cleanupIdleSessions: userTimeout=\(userTimeout) minutes, checking \(self.sessions.count) sessions")
         for (key, session) in sessions where session.status == .idle {
             if session.isHistoricalSnapshot { continue }
             let idleMinutes = Int(-session.lastActivity.timeIntervalSinceNow / 60)
-            let hasMonitor = processMonitors[key] != nil
             if userTimeout > 0 && idleMinutes >= userTimeout {
-                // User-configured timeout applies to all sessions
-                removeSession(key)
-            } else if !hasMonitor && idleMinutes >= defaultStaleMinutes {
-                // No process monitor (hook-only sessions): clean up after 10 min idle
+                Self.debugLog("cleanupIdleSessions: remove timed-out session \(key) idle=\(idleMinutes)min")
+                // User-configured timeout applies to all idle sessions.
                 removeSession(key)
             }
         }
@@ -341,6 +346,7 @@ final class AppState {
     /// Every removal path (cleanup timer, process exit, reducer effect) goes through here
     /// so leaked continuations / connections are impossible.
     private func removeSession(_ sessionId: String) {
+        Self.debugLog("removeSession: \(sessionId)")
         // Resume ALL pending continuations for this session
         drainPermissions(forSession: sessionId)
         drainQuestions(forSession: sessionId)
@@ -409,15 +415,17 @@ final class AppState {
     /// Prefers the PID captured by the bridge (_ppid), falls back to scanning for Claude processes by CWD.
     private func tryMonitorSession(_ sessionId: String) {
         guard processMonitors[sessionId] == nil else { return }
+        guard let session = sessions[sessionId],
+              shouldMonitorProcessLifecycle(for: session) else { return }
 
         // Primary: use PID from bridge (works for any CLI)
-        if let pid = sessions[sessionId]?.cliPid, pid > 0, kill(pid, 0) == 0 {
+        if let pid = session.cliPid, pid > 0, kill(pid, 0) == 0 {
             monitorProcess(sessionId: sessionId, pid: pid)
             return
         }
 
         // Fallback: scan for Claude Code processes by CWD
-        guard let cwd = sessions[sessionId]?.cwd else { return }
+        guard let cwd = session.cwd else { return }
         Task.detached {
             let pid = Self.findPidForCwd(cwd)
             await MainActor.run { [weak self] in
@@ -426,6 +434,12 @@ final class AppState {
                 self.monitorProcess(sessionId: sessionId, pid: pid)
             }
         }
+    }
+
+    private func shouldMonitorProcessLifecycle(for session: SessionSnapshot) -> Bool {
+        // Cursor Desktop launches hook commands under short-lived helper processes.
+        // Monitoring that PID makes the session vanish shortly after each hook fires.
+        session.source != "cursor"
     }
 
     /// Find a Claude process PID by matching CWD
@@ -838,6 +852,12 @@ final class AppState {
             let rightNeedsAttention = right.status == .waitingApproval || right.status == .waitingQuestion
             if leftNeedsAttention != rightNeedsAttention {
                 return leftNeedsAttention
+            }
+
+            let leftNeedsReview = pendingCompletionReviewSessionIds.contains(lhs)
+            let rightNeedsReview = pendingCompletionReviewSessionIds.contains(rhs)
+            if leftNeedsReview != rightNeedsReview {
+                return leftNeedsReview
             }
 
             let leftIsActiveSession = lhs == activeSessionId
@@ -1259,6 +1279,12 @@ final class AppState {
             sessions[sessionId]?.isYoloMode = Self.detectCursorYoloMode()
         }
 
+        if let session = sessions[sessionId],
+           !shouldMonitorProcessLifecycle(for: session),
+           processMonitors[sessionId] != nil {
+            stopMonitor(sessionId)
+        }
+
         for effect in effects {
             executeEffect(effect, sessionId: sessionId)
         }
@@ -1276,12 +1302,9 @@ final class AppState {
             requestCodexRefresh(minimumInterval: 1.0)
         }
 
-        // Handle the "else if activeSessionId == sessionId → mostActive" edge case
-        // (reducer can't check activeSessionId since it's AppState-local)
+        // Keep activeSessionId reserved for genuinely active sessions.
         if sessions[sessionId]?.status == .idle && activeSessionId == sessionId {
-            if normalizedEventName != "Stop" {
-                activeSessionId = mostActiveSessionId()
-            }
+            activeSessionId = mostActiveSessionId()
         }
 
         scheduleSave()
@@ -1621,20 +1644,15 @@ final class AppState {
         }
     }
 
-    /// Find the most recently active non-idle session
+    /// Find the most recently active non-idle session.
     private func mostActiveSessionId() -> String? {
-        // Single-pass: find most recent non-idle, fall back to most recent overall
         var bestNonIdle: (key: String, time: Date)?
-        var bestAny: (key: String, time: Date)?
         for (key, session) in sessions {
-            if bestAny == nil || session.lastActivity > bestAny!.time {
-                bestAny = (key, session.lastActivity)
-            }
             if session.status != .idle, bestNonIdle == nil || session.lastActivity > bestNonIdle!.time {
                 bestNonIdle = (key, session.lastActivity)
             }
         }
-        return (bestNonIdle ?? bestAny)?.key
+        return bestNonIdle?.key
     }
 
     /// Check if Cursor is in YOLO mode by reading its settings
@@ -1700,92 +1718,240 @@ final class AppState {
         }
     }
 
-    private func applyRestoredSessions(
+    nonisolated static func debugLog(_ message: String) {
+        print("[SUPERISLAND DEBUG] \(message)")
+        let path = "/tmp/superisland_debug.log"
+        let existing = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+        try? (existing + message + "\n").write(toFile: path, atomically: true, encoding: .utf8)
+    }
+
+    func applyRestoredSessions(
         persisted: [PersistedSession],
         historicalCodexSessions: [(sessionId: String, snapshot: SessionSnapshot)] = []
     ) {
-        let cutoff = Date().addingTimeInterval(-30 * 60) // 30 minutes
-        for p in persisted where p.lastActivity > cutoff {
-            guard sessions[p.sessionId] == nil else { continue }
-            guard let source = SessionSnapshot.normalizedSupportedSource(p.source) else { continue }
-            guard !SessionFilter.shouldIgnoreSession(source: source, cwd: p.cwd, termBundleId: p.termBundleId) else { continue }
-            var snapshot = SessionSnapshot(startTime: p.startTime)
-            snapshot.cwd = p.cwd
-            snapshot.source = source
-            snapshot.model = p.model
-            snapshot.sessionTitle = p.sessionTitle
-            snapshot.sessionTitleSource = p.sessionTitleSource
-            snapshot.providerSessionId = p.providerSessionId
-            snapshot.lastUserPrompt = p.lastUserPrompt
-            snapshot.lastAssistantMessage = p.lastAssistantMessage
-            if let prompt = p.lastUserPrompt {
-                snapshot.addRecentMessage(ChatMessage(isUser: true, text: prompt))
+        Self.debugLog("applyRestoredSessions: persisted=\(persisted.count), historical=\(historicalCodexSessions.count)")
+        let cutoff = restoredSessionCutoff()
+        let persistedCandidates = persisted
+            .filter { candidate in
+                guard let cutoff else { return true }
+                return candidate.lastActivity > cutoff
             }
-            if let reply = p.lastAssistantMessage {
-                snapshot.addRecentMessage(ChatMessage(isUser: false, text: reply))
-            }
-            snapshot.termApp = p.termApp
-            snapshot.itermSessionId = p.itermSessionId
-            snapshot.ttyPath = p.ttyPath
-            snapshot.kittyWindowId = p.kittyWindowId
-            snapshot.tmuxPane = p.tmuxPane
-            snapshot.tmuxClientTty = p.tmuxClientTty
-            snapshot.cmuxWorkspaceRef = p.cmuxWorkspaceRef
-            snapshot.cmuxSurfaceRef = p.cmuxSurfaceRef
-            snapshot.cmuxPaneRef = p.cmuxPaneRef
-            snapshot.cmuxWorkspaceId = p.cmuxWorkspaceId
-            snapshot.cmuxSurfaceId = p.cmuxSurfaceId
-            snapshot.cmuxSocketPath = p.cmuxSocketPath
-            snapshot.termBundleId = p.termBundleId
-            snapshot.lastActivity = p.lastActivity
-            // Restore persisted cliPid — enables immediate process monitoring for all CLIs
-            if let pid = p.cliPid, pid > 0 {
-                snapshot.cliPid = pid
-            }
-            snapshot = sessionTerminalIndexStore.hydrate(snapshot, sessionId: p.sessionId)
-            sessions[p.sessionId] = snapshot
-            refreshProviderTitle(for: p.sessionId)
-            // Attach process monitor for exit detection, but keep status idle —
-            // actual status will be updated when the next hook event arrives.
-            if let pid = snapshot.cliPid, pid > 0, kill(pid, 0) == 0 {
-                monitorProcess(sessionId: p.sessionId, pid: pid)
-            } else {
-                // Async fallback: scan for Claude processes by CWD (monitor only)
-                let sid = p.sessionId
-                Task.detached {
-                    let pid = Self.findPidForCwd(snapshot.cwd ?? "")
-                    await MainActor.run { [weak self] in
-                        guard let self = self, let pid = pid,
-                              self.sessions[sid] != nil,
-                              self.processMonitors[sid] == nil else { return }
-                        self.monitorProcess(sessionId: sid, pid: pid)
-                        self.refreshDerivedState()
-                    }
+            .sorted { $0.lastActivity > $1.lastActivity }
+            .compactMap { persistedSession -> RestoredSessionCandidate? in
+                let result = self.candidate(from: persistedSession)
+                if result == nil {
+                    Self.debugLog("applyRestoredSessions: dropped persisted session \(persistedSession.sessionId) (source=\(persistedSession.source))")
                 }
+                return result
+            }
+
+        let nonCodexCandidates = persistedCandidates.filter { $0.snapshot.source != "codex" }
+        var codexCandidates = persistedCandidates.filter { $0.snapshot.source == "codex" }
+        Self.debugLog("applyRestoredSessions: nonCodex=\(nonCodexCandidates.count), codexPersisted=\(codexCandidates.count)")
+
+        for candidate in nonCodexCandidates {
+            let inserted = insertRestoredSession(sessionId: candidate.sessionId, snapshot: candidate.snapshot)
+            Self.debugLog("applyRestoredSessions: insert nonCodex \(candidate.sessionId) -> \(inserted)")
+            guard inserted else { continue }
+            refreshProviderTitle(for: candidate.sessionId)
+            if candidate.shouldAttachProcessMonitor {
+                attachRestoredProcessMonitorIfNeeded(sessionId: candidate.sessionId, snapshot: candidate.snapshot)
             }
         }
 
-        for historical in historicalCodexSessions {
+        for historical in historicalCodexSessions.sorted(by: { $0.snapshot.lastActivity > $1.snapshot.lastActivity }) {
             let clearedAt = UserDefaults.standard.double(forKey: Self.historicalSessionsClearedAtKey)
             if clearedAt > 0, historical.snapshot.lastActivity.timeIntervalSince1970 <= clearedAt {
+                Self.debugLog("applyRestoredSessions: skip historical \(historical.sessionId) (clearedAt)")
                 continue
             }
-            guard sessions[historical.sessionId] == nil else { continue }
             let snapshot = sessionTerminalIndexStore.hydrate(historical.snapshot, sessionId: historical.sessionId)
-            sessions[historical.sessionId] = snapshot
-            refreshProviderTitle(for: historical.sessionId, providerSessionId: historical.sessionId)
+            codexCandidates.append(
+                RestoredSessionCandidate(
+                    sessionId: historical.sessionId,
+                    snapshot: snapshot,
+                    shouldAttachProcessMonitor: false
+                )
+            )
+        }
+
+        for candidate in codexCandidates.sorted(by: { $0.snapshot.lastActivity > $1.snapshot.lastActivity }) {
+            let inserted = insertRestoredSession(sessionId: candidate.sessionId, snapshot: candidate.snapshot)
+            Self.debugLog("applyRestoredSessions: insert codex \(candidate.sessionId) -> \(inserted)")
+            guard inserted else { continue }
+            refreshProviderTitle(
+                for: candidate.sessionId,
+                providerSessionId: candidate.snapshot.providerSessionId ?? candidate.sessionId
+            )
+            if candidate.shouldAttachProcessMonitor {
+                attachRestoredProcessMonitorIfNeeded(sessionId: candidate.sessionId, snapshot: candidate.snapshot)
+            }
         }
 
         if activeSessionId == nil {
-            activeSessionId = sessions.first(where: { $0.value.status != .idle })?.key
-                ?? sessions.keys.sorted().first
+            activeSessionId = mostActiveSessionId()
         }
+        Self.debugLog("applyRestoredSessions: sessions after restore=\(self.sessions.count), activeSessionId=\(self.activeSessionId ?? "nil")")
         // Run one cleanup pass immediately after restoring startup state so stale
         // sessions do not linger until the first 60s timer tick.
         cleanupIdleSessions()
+        Self.debugLog("applyRestoredSessions: sessions after cleanup=\(self.sessions.count)")
+    }
+
+    func restoreStartupSessions(
+        persisted: [PersistedSession],
+        historicalCodexSessions: [(sessionId: String, snapshot: SessionSnapshot)] = []
+    ) {
+        applyRestoredSessions(
+            persisted: persisted,
+            historicalCodexSessions: historicalCodexSessions
+        )
+        // Keep a fresh startup snapshot on disk so a restore-only run does not
+        // erase the next launch's session list.
+        // Guard against writing an empty file when cleanup removed all restored sessions.
+        guard !sessions.isEmpty else { return }
+        saveSessions(synchronously: true)
+    }
+
+    private func restoredSessionCutoff(referenceDate: Date = Date()) -> Date? {
+        let timeoutMinutes = SettingsManager.shared.sessionTimeout
+        guard timeoutMinutes > 0 else { return nil }
+        return referenceDate.addingTimeInterval(TimeInterval(-timeoutMinutes * 60))
+    }
+
+    @discardableResult
+    func insertRestoredSession(sessionId: String, snapshot: SessionSnapshot) -> Bool {
+        guard sessions[sessionId] == nil else {
+            Self.debugLog("insertRestoredSession: skip \(sessionId) (already exists)")
+            return false
+        }
+        if let dup = restoredSessionDuplicateKey(for: sessionId, snapshot: snapshot) {
+            Self.debugLog("insertRestoredSession: skip \(sessionId) (duplicate of \(dup))")
+            return false
+        }
+        sessions[sessionId] = snapshot
+        Self.debugLog("insertRestoredSession: inserted \(sessionId)")
+        return true
+    }
+
+    func restoredSessionDuplicateKey(for sessionId: String, snapshot: SessionSnapshot) -> String? {
+        let incomingProviderSessionId = snapshot.providerSessionId?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let directMatch = sessions.first(where: { existingKey, existing in
+            guard existing.source == snapshot.source else { return false }
+
+            let existingProviderSessionId = existing.providerSessionId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let directIDs = [sessionId, incomingProviderSessionId]
+                .compactMap { $0 }
+                .filter { !$0.isEmpty }
+
+            if directIDs.contains(existingKey) {
+                return true
+            }
+
+            if let existingProviderSessionId, directIDs.contains(existingProviderSessionId) {
+                return true
+            }
+
+            return false
+        })?.key {
+            return directMatch
+        }
+
+        guard snapshot.source == "codex",
+              let cwd = snapshot.cwd,
+              !cwd.isEmpty else {
+            return nil
+        }
+
+        return sessions.first(where: { _, existing in
+            guard existing.source == "codex",
+                  existing.cwd == cwd else {
+                return false
+            }
+
+            if let existingPid = existing.cliPid,
+               let incomingPid = snapshot.cliPid {
+                return existingPid == incomingPid
+            }
+
+            return existing.isHistoricalSnapshot
+                || snapshot.isHistoricalSnapshot
+                || existing.cliPid == nil
+                || snapshot.cliPid == nil
+        })?.key
+    }
+
+    private func candidate(from persisted: PersistedSession) -> RestoredSessionCandidate? {
+        guard let source = SessionSnapshot.normalizedSupportedSource(persisted.source) else { return nil }
+        guard !SessionFilter.shouldIgnoreSession(source: source, cwd: persisted.cwd, termBundleId: persisted.termBundleId) else {
+            return nil
+        }
+
+        var snapshot = SessionSnapshot(startTime: persisted.startTime)
+        snapshot.cwd = persisted.cwd
+        snapshot.source = source
+        snapshot.model = persisted.model
+        snapshot.sessionTitle = persisted.sessionTitle
+        snapshot.sessionTitleSource = persisted.sessionTitleSource
+        snapshot.providerSessionId = persisted.providerSessionId
+        snapshot.lastUserPrompt = persisted.lastUserPrompt
+        snapshot.lastAssistantMessage = persisted.lastAssistantMessage
+        if let prompt = persisted.lastUserPrompt {
+            snapshot.addRecentMessage(ChatMessage(isUser: true, text: prompt))
+        }
+        if let reply = persisted.lastAssistantMessage {
+            snapshot.addRecentMessage(ChatMessage(isUser: false, text: reply))
+        }
+        snapshot.termApp = persisted.termApp
+        snapshot.itermSessionId = persisted.itermSessionId
+        snapshot.ttyPath = persisted.ttyPath
+        snapshot.kittyWindowId = persisted.kittyWindowId
+        snapshot.tmuxPane = persisted.tmuxPane
+        snapshot.tmuxClientTty = persisted.tmuxClientTty
+        snapshot.cmuxWorkspaceRef = persisted.cmuxWorkspaceRef
+        snapshot.cmuxSurfaceRef = persisted.cmuxSurfaceRef
+        snapshot.cmuxPaneRef = persisted.cmuxPaneRef
+        snapshot.cmuxWorkspaceId = persisted.cmuxWorkspaceId
+        snapshot.cmuxSurfaceId = persisted.cmuxSurfaceId
+        snapshot.cmuxSocketPath = persisted.cmuxSocketPath
+        snapshot.termBundleId = persisted.termBundleId
+        snapshot.lastActivity = persisted.lastActivity
+        if let pid = persisted.cliPid, pid > 0 {
+            snapshot.cliPid = pid
+        }
+        snapshot = sessionTerminalIndexStore.hydrate(snapshot, sessionId: persisted.sessionId)
+
+        return RestoredSessionCandidate(
+            sessionId: persisted.sessionId,
+            snapshot: snapshot,
+            shouldAttachProcessMonitor: true
+        )
+    }
+
+    private func attachRestoredProcessMonitorIfNeeded(sessionId: String, snapshot: SessionSnapshot) {
+        guard shouldMonitorProcessLifecycle(for: snapshot) else { return }
+
+        if let pid = snapshot.cliPid, pid > 0, kill(pid, 0) == 0 {
+            monitorProcess(sessionId: sessionId, pid: pid)
+            return
+        }
+
+        let sid = sessionId
+        Task.detached {
+            let pid = Self.findPidForCwd(snapshot.cwd ?? "")
+            await MainActor.run { [weak self] in
+                guard let self = self, let pid = pid,
+                      self.sessions[sid] != nil,
+                      self.processMonitors[sid] == nil else { return }
+                self.monitorProcess(sessionId: sid, pid: pid)
+                self.refreshDerivedState()
+            }
+        }
     }
 
     func startSessionDiscovery() {
+        Self.debugLog("startSessionDiscovery: entering")
         startCleanupTimer()
         startCodexRefreshLoop()
         // Restore persisted state and historical Codex sessions off the main thread.
@@ -1794,13 +1960,13 @@ final class AppState {
             let historicalCodexSessions = ConfigInstaller.isEnabled(source: "codex")
                 ? CodexSessionHistoryLoader.loadRecentSessions()
                 : []
+            Self.debugLog("startSessionDiscovery: loaded persisted=\(persisted.count), historicalCodex=\(historicalCodexSessions.count)")
             await MainActor.run { [weak self] in
                 guard let self else { return }
-                self.applyRestoredSessions(
+                self.restoreStartupSessions(
                     persisted: persisted,
                     historicalCodexSessions: historicalCodexSessions
                 )
-                SessionPersistence.clear()
             }
         }
 
@@ -1934,7 +2100,7 @@ final class AppState {
             didAdd = true
         }
         if didAdd && activeSessionId == nil {
-            activeSessionId = sessions.keys.sorted().first
+            activeSessionId = mostActiveSessionId()
         }
         refreshDerivedState()
         if discoveredCodex {
@@ -2082,8 +2248,8 @@ final class AppState {
         if snapshot.title == nil {
             refreshProviderTitle(for: trackedSessionId, providerSessionId: snapshot.threadId)
         }
-        if activeSessionId == nil {
-            activeSessionId = trackedSessionId
+        if activeSessionId == nil || sessions[activeSessionId ?? ""]?.status == .idle {
+            activeSessionId = mostActiveSessionId()
         }
         return codexSessionChanged(previous: previous, current: session)
     }

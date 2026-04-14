@@ -38,12 +38,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         hookServer = HookServer(appState: appState)
         hookServer?.start()
 
-        if ConfigInstaller.install() {
-            Self.log.info("Hooks installed")
-        } else {
-            Self.log.warning("Failed to install hooks")
-        }
-
         let displayModeCoordinator = DisplayModeCoordinator(appState: appState)
         displayModeCoordinator.start()
         self.displayModeCoordinator = displayModeCoordinator
@@ -54,26 +48,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             andEventID: AEEventID(kAEGetURL)
         )
 
-        let usageMonitorManager = UsageMonitorLaunchAgentManager()
-        do {
-            if try usageMonitorManager.repairIfNeeded() {
-                Self.log.info("Repaired usage monitor launch agent")
-            }
-        } catch {
-            Self.log.error("Failed to repair usage monitor: \(error.localizedDescription)")
-        }
-
-        let codexAutoSwitchManager = CodexAutoSwitchLaunchAgentManager()
-        do {
-            if try codexAutoSwitchManager.repairIfNeeded() {
-                Self.log.info("Repaired Codex auto-switch launch agent")
-            }
-        } catch {
-            Self.log.error("Failed to repair Codex auto-switch watcher: \(error.localizedDescription)")
-        }
-        appState.refreshUsageSnapshot()
-
-        appState.startSessionDiscovery()
+        bootstrapBackgroundServices()
 
         // Hooks auto-recovery: periodic + app activation trigger
         hookRecoveryTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
@@ -117,6 +92,59 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupGlobalShortcut()
         observeSettingsChanges()
 
+    }
+
+    private func bootstrapBackgroundServices() {
+        Task.detached(priority: .utility) { [weak self] in
+            let hooksInstalled = ConfigInstaller.install()
+            let usageMonitorManager = UsageMonitorLaunchAgentManager()
+            let codexAutoSwitchManager = CodexAutoSwitchLaunchAgentManager()
+
+            let usageMonitorResult: Result<Bool, Error>
+            do {
+                usageMonitorResult = .success(try usageMonitorManager.repairIfNeeded())
+            } catch {
+                usageMonitorResult = .failure(error)
+            }
+
+            let codexAutoSwitchResult: Result<Bool, Error>
+            do {
+                codexAutoSwitchResult = .success(try codexAutoSwitchManager.repairIfNeeded())
+            } catch {
+                codexAutoSwitchResult = .failure(error)
+            }
+
+            await MainActor.run { [weak self, hooksInstalled, usageMonitorResult, codexAutoSwitchResult] in
+                guard let self else { return }
+
+                if hooksInstalled {
+                    Self.log.info("Hooks installed")
+                } else {
+                    Self.log.warning("Failed to install hooks")
+                }
+
+                switch usageMonitorResult {
+                case .success(true):
+                    Self.log.info("Repaired usage monitor launch agent")
+                case .failure(let error):
+                    Self.log.error("Failed to repair usage monitor: \(error.localizedDescription)")
+                case .success(false):
+                    break
+                }
+
+                switch codexAutoSwitchResult {
+                case .success(true):
+                    Self.log.info("Repaired Codex auto-switch launch agent")
+                case .failure(let error):
+                    Self.log.error("Failed to repair Codex auto-switch watcher: \(error.localizedDescription)")
+                case .success(false):
+                    break
+                }
+
+                self.appState.refreshUsageSnapshot()
+                self.appState.startSessionDiscovery()
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {

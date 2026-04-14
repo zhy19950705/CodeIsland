@@ -47,4 +47,32 @@ final class NotchPanelHoverTests: XCTestCase {
             )
         )
     }
+
+    func testExpandedHoverEndedIsIgnoredWhenMouseIsStillInsidePanelFrame() {
+        XCTAssertTrue(
+            NotchPanelView.shouldIgnoreExpandedHoverEnded(
+                mouseLocation: CGPoint(x: 180, y: 24),
+                panelFrame: CGRect(x: 100, y: 0, width: 220, height: 320),
+                isExpanded: true
+            )
+        )
+    }
+
+    func testExpandedHoverEndedIsNotIgnoredWhenMouseLeftPanelOrPanelIsCollapsed() {
+        XCTAssertFalse(
+            NotchPanelView.shouldIgnoreExpandedHoverEnded(
+                mouseLocation: CGPoint(x: 340, y: 24),
+                panelFrame: CGRect(x: 100, y: 0, width: 220, height: 320),
+                isExpanded: true
+            )
+        )
+
+        XCTAssertFalse(
+            NotchPanelView.shouldIgnoreExpandedHoverEnded(
+                mouseLocation: CGPoint(x: 180, y: 24),
+                panelFrame: CGRect(x: 100, y: 0, width: 220, height: 320),
+                isExpanded: false
+            )
+        )
+    }
 }

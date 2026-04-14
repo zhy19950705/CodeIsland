@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import CommonCrypto
 import SuperIslandCore
 
 /// Small CLI surface embedded in the main app binary so Codex hooks can call
@@ -437,7 +438,7 @@ private struct UsageMonitorCommand {
     private let isVerbose: Bool
 
     init(arguments: [String]) {
-        let rawProviders = Self.value(after: "--providers", in: arguments) ?? "claude,codex"
+        let rawProviders = Self.value(after: "--providers", in: arguments) ?? "claude,codex,cursor"
         self.providers = rawProviders
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
@@ -485,31 +486,18 @@ private struct UsageMonitorCommand {
     private func buildUsageSnapshot() -> UsageSnapshot {
         var snapshots: [UsageProviderSnapshot] = []
         let now = Date().timeIntervalSince1970
+        let previousSnapshot = UsageSnapshotStore.load()
+        let previousClaudeSnapshot = previousSnapshot.providers.first(where: { $0.source == .claude })
+        let previousCursorSnapshot = previousSnapshot.providers.first(where: { $0.source == .cursor })
+        let claudeUsageHistory = ClaudeMonthlyUsageCalculator.loadUsageHistory()
 
-        if providers.contains("claude"), let quota = fetchClaudeQuota() {
-            let primaryUsed = clampPercentage(Int((quota.primary.utilization * 100).rounded()))
-            let secondaryUsed = clampPercentage(Int((quota.secondary.utilization * 100).rounded()))
-            snapshots.append(
-                UsageProviderSnapshot(
-                    source: .claude,
-                    primary: UsageWindowStat(
-                        label: "5h",
-                        percentage: primaryUsed,
-                        detail: claudeWindowDetail(resetAt: quota.primary.resetAt),
-                        tintHex: tintHex(forUsedPercentage: primaryUsed)
-                    ),
-                    secondary: UsageWindowStat(
-                        label: "7d",
-                        percentage: secondaryUsed,
-                        detail: claudeWindowDetail(resetAt: quota.secondary.resetAt),
-                        tintHex: tintHex(forUsedPercentage: secondaryUsed)
-                    ),
-                    updatedAtUnix: now,
-                    summary: nil,
-                    monthly: nil,
-                    history: nil
-                )
-            )
+        if providers.contains("claude"),
+           let snapshot = buildClaudeSnapshot(
+            now: now,
+            previousSnapshot: previousClaudeSnapshot,
+            history: claudeUsageHistory
+           ) {
+            snapshots.append(snapshot)
         }
 
         if providers.contains("codex"), let quota = fetchCodexQuota() {
@@ -539,28 +527,153 @@ private struct UsageMonitorCommand {
             )
         }
 
+        if providers.contains("cursor"),
+           let snapshot = buildCursorSnapshot(now: now, previousSnapshot: previousCursorSnapshot) {
+            snapshots.append(snapshot)
+        }
+
         return UsageSnapshot(providers: snapshots.sorted { $0.source.sortOrder < $1.source.sortOrder })
     }
 
-    private func fetchClaudeQuota() -> (primary: ClaudeWindow, secondary: ClaudeWindow)? {
-        guard let token = loadClaudeAccessToken(),
-              let payload = fetchJSON(
-                url: URL(string: "https://api.anthropic.com/api/oauth/usage")!,
-                headers: [
-                    "Authorization": "Bearer \(token)",
-                    "Accept": "application/json",
-                    "anthropic-beta": "oauth-2025-04-20",
-                ]
-              ),
-              let fiveHour = payload["five_hour"] as? [String: Any],
-              let sevenDay = payload["seven_day"] as? [String: Any] else {
+    private func buildClaudeSnapshot(
+        now: TimeInterval,
+        previousSnapshot: UsageProviderSnapshot?,
+        history: (monthly: UsageMonthlyStat?, history: [UsageHistoryRangeSnapshot])
+    ) -> UsageProviderSnapshot? {
+        if let quota = fetchClaudeQuota() {
+            let primaryUsed = clampPercentage(Int((quota.primary.utilization * 100).rounded()))
+            let secondaryUsed = clampPercentage(Int((quota.secondary.utilization * 100).rounded()))
+            return UsageProviderSnapshot(
+                source: .claude,
+                primary: UsageWindowStat(
+                    label: "5h",
+                    percentage: primaryUsed,
+                    detail: claudeWindowDetail(resetAt: quota.primary.resetAt),
+                    tintHex: tintHex(forUsedPercentage: primaryUsed)
+                ),
+                secondary: UsageWindowStat(
+                    label: "7d",
+                    percentage: secondaryUsed,
+                    detail: claudeWindowDetail(resetAt: quota.secondary.resetAt),
+                    tintHex: tintHex(forUsedPercentage: secondaryUsed)
+                ),
+                updatedAtUnix: now,
+                summary: claudeQuotaSummary(sourceLabel: quota.sourceLabel, hasLocalHistory: history.monthly != nil),
+                monthly: history.monthly,
+                history: history.history.isEmpty ? nil : history.history,
+                showsQuotaBadge: true
+            )
+        }
+
+        if let previousSnapshot,
+           previousSnapshot.hasQuotaMetrics,
+           let updatedAtUnix = previousSnapshot.updatedAtUnix,
+           now - updatedAtUnix <= 6 * 60 * 60 {
+            return UsageProviderSnapshot(
+                source: .claude,
+                primary: previousSnapshot.primary,
+                secondary: previousSnapshot.secondary,
+                updatedAtUnix: updatedAtUnix,
+                summary: history.monthly == nil ? "Using cached quota" : "Using cached quota + local token history",
+                monthly: history.monthly,
+                history: history.history.isEmpty ? nil : history.history,
+                showsQuotaBadge: true
+            )
+        }
+
+        guard history.monthly != nil || !history.history.isEmpty else {
             return nil
         }
 
-        return (
-            ClaudeWindow(utilization: normalizedClaudeUtilization(fiveHour["utilization"]), resetAt: parseTimestamp(fiveHour["resets_at"])),
-            ClaudeWindow(utilization: normalizedClaudeUtilization(sevenDay["utilization"]), resetAt: parseTimestamp(sevenDay["resets_at"]))
+        return UsageProviderSnapshot(
+            source: .claude,
+            primary: UsageWindowStat(
+                label: "30d",
+                percentage: 0,
+                detail: history.monthly.map { formatTokenCount($0.totalTokens) } ?? "--",
+                tintHex: "#7A7A7A"
+            ),
+            secondary: UsageWindowStat(
+                label: "log",
+                percentage: 0,
+                detail: "Local history",
+                tintHex: "#7A7A7A"
+            ),
+            updatedAtUnix: now,
+            summary: "Quota unavailable; showing local Claude token history",
+            monthly: history.monthly,
+            history: history.history.isEmpty ? nil : history.history,
+            showsQuotaBadge: false
         )
+    }
+
+    private func buildCursorSnapshot(
+        now: TimeInterval,
+        previousSnapshot: UsageProviderSnapshot?
+    ) -> UsageProviderSnapshot? {
+        if let quota = fetchCursorQuota() {
+            return UsageProviderSnapshot(
+                source: .cursor,
+                primary: UsageWindowStat(
+                    label: quota.primary.label,
+                    percentage: quota.primary.usedPercent,
+                    detail: quota.primary.detail,
+                    tintHex: tintHex(forUsedPercentage: quota.primary.usedPercent)
+                ),
+                secondary: UsageWindowStat(
+                    label: quota.secondary.label,
+                    percentage: quota.secondary.usedPercent,
+                    detail: quota.secondary.detail,
+                    tintHex: tintHex(forUsedPercentage: quota.secondary.usedPercent)
+                ),
+                updatedAtUnix: now,
+                summary: quota.summary,
+                monthly: nil,
+                history: nil,
+                showsQuotaBadge: true
+            )
+        }
+
+        if let previousSnapshot,
+           previousSnapshot.hasQuotaMetrics,
+           let updatedAtUnix = previousSnapshot.updatedAtUnix,
+           now - updatedAtUnix <= 6 * 60 * 60 {
+            return UsageProviderSnapshot(
+                source: .cursor,
+                primary: previousSnapshot.primary,
+                secondary: previousSnapshot.secondary,
+                updatedAtUnix: updatedAtUnix,
+                summary: "Using cached Cursor quota",
+                monthly: nil,
+                history: nil,
+                showsQuotaBadge: true
+            )
+        }
+
+        return nil
+    }
+
+    private func fetchClaudeQuota() -> ClaudeQuota? {
+        let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
+        if let accessToken = loadClaudeCodeAccessToken(),
+           let payload = fetchJSON(
+                url: endpoint,
+                headers: [
+                    "Authorization": "Bearer \(accessToken)",
+                    "Accept": "application/json",
+                    "anthropic-beta": "oauth-2025-04-20",
+                ]
+           ),
+           let fiveHour = payload["five_hour"] as? [String: Any],
+           let sevenDay = payload["seven_day"] as? [String: Any] {
+            return ClaudeQuota(
+                primary: ClaudeWindow(utilization: normalizedClaudeUtilization(fiveHour["utilization"]), resetAt: parseTimestamp(fiveHour["resets_at"])),
+                secondary: ClaudeWindow(utilization: normalizedClaudeUtilization(sevenDay["utilization"]), resetAt: parseTimestamp(sevenDay["resets_at"])),
+                sourceLabel: "Claude Code OAuth"
+            )
+        }
+
+        return fetchClaudeWebQuota()
     }
 
     private func fetchCodexQuota() -> CodexQuota? {
@@ -593,11 +706,27 @@ private struct UsageMonitorCommand {
         )
     }
 
+    private func fetchCursorQuota() -> CursorQuota? {
+        for candidate in loadCursorCookieCandidates(requireKnownSessionName: true) {
+            if let quota = fetchCursorQuota(cookieHeader: candidate.cookieHeader, sourceLabel: candidate.sourceLabel) {
+                return quota
+            }
+        }
+
+        for candidate in loadCursorCookieCandidates(requireKnownSessionName: false) {
+            if let quota = fetchCursorQuota(cookieHeader: candidate.cookieHeader, sourceLabel: candidate.sourceLabel) {
+                return quota
+            }
+        }
+
+        return nil
+    }
+
     private func loadCodexAccessToken() -> String? {
         CodexAuthStore.load()?.accessToken
     }
 
-    private func loadClaudeAccessToken() -> String? {
+    private func loadClaudeCodeAccessToken() -> String? {
         if let keychainPayload = runProcess(executable: "/usr/bin/security", arguments: [
             "find-generic-password",
             "-s", "Claude Code-credentials",
@@ -633,6 +762,297 @@ private struct UsageMonitorCommand {
         return nil
     }
 
+    private func fetchClaudeWebQuota() -> ClaudeQuota? {
+        guard let sessionKey = loadClaudeWebSessionKey(),
+              let organizationID = fetchClaudeWebOrganizationID(sessionKey: sessionKey),
+              let payload = fetchJSON(
+                url: URL(string: "https://claude.ai/api/organizations/\(organizationID)/usage")!,
+                headers: [
+                    "Cookie": "sessionKey=\(sessionKey)",
+                    "Accept": "application/json",
+                ]
+              ),
+              let fiveHour = payload["five_hour"] as? [String: Any],
+              let sevenDay = payload["seven_day"] as? [String: Any] else {
+            return nil
+        }
+
+        return ClaudeQuota(
+            primary: ClaudeWindow(utilization: normalizedClaudeUtilization(fiveHour["utilization"]), resetAt: parseTimestamp(fiveHour["resets_at"])),
+            secondary: ClaudeWindow(utilization: normalizedClaudeUtilization(sevenDay["utilization"]), resetAt: parseTimestamp(sevenDay["resets_at"])),
+            sourceLabel: "Claude Web API"
+        )
+    }
+
+    private func loadClaudeWebSessionKey() -> String? {
+        let cookiesPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Claude/Cookies", isDirectory: false)
+            .path
+
+        guard let encryptedHex = runProcess(
+            executable: "/usr/bin/sqlite3",
+            arguments: [
+                "-readonly",
+                cookiesPath,
+                "select hex(encrypted_value) from cookies where host_key in ('claude.ai','.claude.ai') and name='sessionKey' order by host_key limit 1;"
+            ]
+        ),
+        let encryptedData = dataFromHexString(encryptedHex),
+        let safeStorageSecret = runProcess(
+            executable: "/usr/bin/security",
+            arguments: ["find-generic-password", "-s", "Claude Safe Storage", "-w"]
+        ),
+        let key = deriveClaudeDesktopKey(secret: safeStorageSecret),
+        let decrypted = decryptClaudeDesktopCache(encryptedData: encryptedData, key: key) else {
+            return nil
+        }
+
+        return extractClaudeSessionKey(from: decrypted)
+    }
+
+    private func fetchClaudeWebOrganizationID(sessionKey: String) -> String? {
+        guard let payload = fetchJSONArray(
+            url: URL(string: "https://claude.ai/api/organizations")!,
+            headers: [
+                "Cookie": "sessionKey=\(sessionKey)",
+                "Accept": "application/json",
+            ]
+        ) else {
+            return nil
+        }
+
+        let selected = payload.first(where: { organization in
+            let capabilities = (organization["capabilities"] as? [String])?.map { $0.lowercased() } ?? []
+            return capabilities.contains("chat")
+        }) ?? payload.first(where: { organization in
+            let capabilities = Set((organization["capabilities"] as? [String])?.map { $0.lowercased() } ?? [])
+            return !(capabilities.count == 1 && capabilities.contains("api"))
+        }) ?? payload.first
+
+        return nonEmptyString(selected?["uuid"] ?? selected?["id"])
+    }
+
+    private func fetchCursorQuota(cookieHeader: String, sourceLabel: String) -> CursorQuota? {
+        guard let usageResponse = fetchJSONResponse(
+            url: URL(string: "https://cursor.com/api/usage-summary")!,
+            headers: [
+                "Cookie": cookieHeader,
+                "Accept": "application/json",
+            ]
+        ), usageResponse.statusCode == 200,
+        let payload = usageResponse.object else {
+            return nil
+        }
+
+        let userPayload = fetchJSONResponse(
+            url: URL(string: "https://cursor.com/api/auth/me")!,
+            headers: [
+                "Cookie": cookieHeader,
+                "Accept": "application/json",
+            ]
+        )
+        let userInfo = userPayload?.statusCode == 200 ? userPayload?.object : nil
+        let userID = nonEmptyString(userInfo?["sub"])
+
+        var requestUsage: [String: Any]?
+        if let userID,
+           let requestUsageResponse = fetchJSONResponse(
+            url: URL(string: "https://cursor.com/api/usage?user=\(userID.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? userID)")!,
+            headers: [
+                "Cookie": cookieHeader,
+                "Accept": "application/json",
+            ]
+           ),
+           requestUsageResponse.statusCode == 200 {
+            requestUsage = requestUsageResponse.object
+        }
+
+        let individualUsage = payload["individualUsage"] as? [String: Any]
+        let plan = individualUsage?["plan"] as? [String: Any]
+        let individualOnDemand = individualUsage?["onDemand"] as? [String: Any]
+        let teamUsage = payload["teamUsage"] as? [String: Any]
+        let teamOnDemand = teamUsage?["onDemand"] as? [String: Any]
+
+        let autoPercent = normalizedCursorPercent(plan?["autoPercentUsed"])
+        let apiPercent = normalizedCursorPercent(plan?["apiPercentUsed"])
+        let totalPercent = resolvedCursorTotalPercent(plan: plan, autoPercent: autoPercent, apiPercent: apiPercent)
+        let billingCycleEnd = parseTimestamp(payload["billingCycleEnd"])
+        let resetDetail = cursorResetDetail(resetAt: billingCycleEnd)
+
+        var primary = CursorWindow(
+            label: "Total",
+            usedPercent: totalPercent,
+            detail: resetDetail
+        )
+
+        if let requestWindow = parseCursorRequestWindow(requestUsage, resetDetail: resetDetail) {
+            primary = requestWindow
+        }
+
+        let secondary = resolvedCursorSecondaryWindow(
+            autoPercent: autoPercent,
+            apiPercent: apiPercent,
+            fallbackPercent: totalPercent,
+            resetDetail: resetDetail
+        )
+
+        let summary = cursorUsageSummary(
+            payload: payload,
+            plan: plan,
+            individualOnDemand: individualOnDemand,
+            teamOnDemand: teamOnDemand,
+            userInfo: userInfo,
+            sourceLabel: sourceLabel,
+            apiPercent: apiPercent
+        )
+
+        return CursorQuota(primary: primary, secondary: secondary, summary: summary)
+    }
+
+    private func loadCursorCookieCandidates(requireKnownSessionName: Bool) -> [CursorCookieCandidate] {
+        var candidates: [CursorCookieCandidate] = []
+        for source in chromiumBrowserSources() {
+            guard let safeStorageKey = loadSafeStorageKey(serviceName: source.safeStorageService) else {
+                continue
+            }
+
+            for profileURL in chromiumProfileDirectories(baseDirectory: source.baseDirectory) {
+                guard let cookies = loadChromiumCookies(
+                    cookieStoreURL: profileURL.appendingPathComponent("Cookies", isDirectory: false),
+                    key: safeStorageKey
+                ), !cookies.isEmpty else {
+                    continue
+                }
+
+                let hasKnownSessionName = cookies.contains { Self.cursorSessionCookieNames.contains($0.name) }
+                guard requireKnownSessionName ? hasKnownSessionName : !hasKnownSessionName else { continue }
+
+                let sourceLabel = sourceLabel(browser: source.label, profileURL: profileURL, domainCookiesOnly: !hasKnownSessionName)
+                let cookieHeader = cookies
+                    .map { "\($0.name)=\($0.value)" }
+                    .joined(separator: "; ")
+                guard !cookieHeader.isEmpty else { continue }
+
+                candidates.append(
+                    CursorCookieCandidate(
+                        cookieHeader: cookieHeader,
+                        sourceLabel: sourceLabel
+                    )
+                )
+            }
+        }
+
+        return candidates
+    }
+
+    private func chromiumBrowserSources() -> [ChromiumBrowserSource] {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return [
+            ChromiumBrowserSource(
+                label: "Arc",
+                baseDirectory: home.appendingPathComponent("Library/Application Support/Arc/User Data", isDirectory: true),
+                safeStorageService: "Arc Safe Storage"
+            ),
+            ChromiumBrowserSource(
+                label: "Chrome",
+                baseDirectory: home.appendingPathComponent("Library/Application Support/Google/Chrome", isDirectory: true),
+                safeStorageService: "Chrome Safe Storage"
+            ),
+            ChromiumBrowserSource(
+                label: "Brave",
+                baseDirectory: home.appendingPathComponent("Library/Application Support/BraveSoftware/Brave-Browser", isDirectory: true),
+                safeStorageService: "Brave Safe Storage"
+            ),
+            ChromiumBrowserSource(
+                label: "Edge",
+                baseDirectory: home.appendingPathComponent("Library/Application Support/Microsoft Edge", isDirectory: true),
+                safeStorageService: "Microsoft Edge Safe Storage"
+            ),
+            ChromiumBrowserSource(
+                label: "Chromium",
+                baseDirectory: home.appendingPathComponent("Library/Application Support/Chromium", isDirectory: true),
+                safeStorageService: "Chromium Safe Storage"
+            ),
+        ]
+    }
+
+    private func chromiumProfileDirectories(baseDirectory: URL) -> [URL] {
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: baseDirectory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        return contents
+            .filter { url in
+                let name = url.lastPathComponent
+                guard name == "Default" || name.hasPrefix("Profile ") || name == "Guest Profile" else {
+                    return false
+                }
+                return FileManager.default.fileExists(atPath: url.appendingPathComponent("Cookies", isDirectory: false).path)
+            }
+            .sorted { lhs, rhs in
+                if lhs.lastPathComponent == rhs.lastPathComponent { return lhs.path < rhs.path }
+                if lhs.lastPathComponent == "Default" { return true }
+                if rhs.lastPathComponent == "Default" { return false }
+                return lhs.lastPathComponent < rhs.lastPathComponent
+            }
+    }
+
+    private func loadChromiumCookies(cookieStoreURL: URL, key: Data) -> [ChromiumCookie]? {
+        let query = """
+        select name || char(31) || hex(value) || char(31) || hex(encrypted_value)
+        from cookies
+        where host_key in ('cursor.com','.cursor.com','www.cursor.com','.www.cursor.com','cursor.sh','.cursor.sh','authenticator.cursor.sh','.authenticator.cursor.sh')
+           or host_key like '%.cursor.com'
+           or host_key like '%.cursor.sh'
+        order by host_key, name;
+        """
+
+        guard let raw = runProcess(
+            executable: "/usr/bin/sqlite3",
+            arguments: [
+                "-readonly",
+                cookieStoreURL.path,
+                query
+            ]
+        ), !raw.isEmpty else {
+            return nil
+        }
+
+        return raw
+            .split(separator: "\n")
+            .compactMap { line in
+                let parts = line.split(separator: "\u{1F}", omittingEmptySubsequences: false)
+                guard parts.count == 3 else { return nil }
+
+                let name = String(parts[0])
+                let valueHex = String(parts[1])
+                let encryptedHex = String(parts[2])
+
+                if let value = stringFromHexString(valueHex), !value.isEmpty {
+                    return ChromiumCookie(name: name, value: value)
+                }
+
+                guard let encryptedData = dataFromHexString(encryptedHex),
+                      let decryptedData = decryptChromiumCookieValue(encryptedData: encryptedData, key: key),
+                      let decryptedValue = String(data: decryptedData, encoding: .utf8),
+                      !decryptedValue.isEmpty else {
+                    return nil
+                }
+
+                return ChromiumCookie(name: name, value: decryptedValue)
+            }
+    }
+
+    private func sourceLabel(browser: String, profileURL: URL, domainCookiesOnly: Bool) -> String {
+        let profileName = profileURL.lastPathComponent
+        let base = profileName == "Default" ? browser : "\(browser) \(profileName)"
+        return domainCookiesOnly ? "\(base) domain cookies" : base
+    }
+
     private func fetchJSON(url: URL, headers: [String: String]) -> [String: Any]? {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
         headers.forEach { request.setValue($1, forHTTPHeaderField: $0) }
@@ -646,6 +1066,55 @@ private struct UsageMonitorCommand {
                   (200..<300).contains(httpResponse.statusCode),
                   let data,
                   let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return
+            }
+            result = object
+        }.resume()
+
+        _ = semaphore.wait(timeout: .now() + 35)
+        return result
+    }
+
+    private func fetchJSONResponse(url: URL, headers: [String: String]) -> (statusCode: Int, object: [String: Any]?)? {
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
+        headers.forEach { request.setValue($1, forHTTPHeaderField: $0) }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var statusCode = 0
+        var result: [String: Any]?
+
+        URLSession.shared.dataTask(with: request) { data, response, _ in
+            defer { semaphore.signal() }
+            guard let httpResponse = response as? HTTPURLResponse else {
+                return
+            }
+
+            statusCode = httpResponse.statusCode
+            guard let data,
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return
+            }
+            result = object
+        }.resume()
+
+        _ = semaphore.wait(timeout: .now() + 35)
+        guard statusCode > 0 else { return nil }
+        return (statusCode, result)
+    }
+
+    private func fetchJSONArray(url: URL, headers: [String: String]) -> [[String: Any]]? {
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
+        headers.forEach { request.setValue($1, forHTTPHeaderField: $0) }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: [[String: Any]]?
+
+        URLSession.shared.dataTask(with: request) { data, response, _ in
+            defer { semaphore.signal() }
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode),
+                  let data,
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
                 return
             }
             result = object
@@ -760,6 +1229,16 @@ private struct UsageMonitorCommand {
         return "#2FD86D"
     }
 
+    private func formatTokenCount(_ totalTokens: Int) -> String {
+        if totalTokens >= 1_000_000 {
+            return String(format: "%.1fM tokens", Double(totalTokens) / 1_000_000)
+        }
+        if totalTokens >= 1_000 {
+            return String(format: "%.1fK tokens", Double(totalTokens) / 1_000)
+        }
+        return "\(totalTokens) tokens"
+    }
+
     private func codexUsageSummary(payload: [String: Any]) -> String? {
         var parts: [String] = []
 
@@ -839,9 +1318,25 @@ private struct UsageMonitorCommand {
         return arguments[index + 1]
     }
 
+    private static let cursorSessionCookieNames: Set<String> = [
+        "WorkosCursorSessionToken",
+        "__Secure-next-auth.session-token",
+        "next-auth.session-token",
+        "wos-session",
+        "__Secure-wos-session",
+        "authjs.session-token",
+        "__Secure-authjs.session-token",
+    ]
+
     private struct ClaudeWindow {
         var utilization: Double
         var resetAt: TimeInterval?
+    }
+
+    private struct ClaudeQuota {
+        var primary: ClaudeWindow
+        var secondary: ClaudeWindow
+        var sourceLabel: String
     }
 
     private struct CodexWindow {
@@ -854,6 +1349,264 @@ private struct UsageMonitorCommand {
         var primary: CodexWindow
         var secondary: CodexWindow
         var summary: String?
+    }
+
+    private struct CursorWindow {
+        var label: String
+        var usedPercent: Int
+        var detail: String
+    }
+
+    private struct CursorQuota {
+        var primary: CursorWindow
+        var secondary: CursorWindow
+        var summary: String?
+    }
+
+    private struct ChromiumBrowserSource {
+        var label: String
+        var baseDirectory: URL
+        var safeStorageService: String
+    }
+
+    private struct ChromiumCookie {
+        var name: String
+        var value: String
+    }
+
+    private struct CursorCookieCandidate {
+        var cookieHeader: String
+        var sourceLabel: String
+    }
+
+    private func loadSafeStorageKey(serviceName: String) -> Data? {
+        guard let secret = runProcess(
+            executable: "/usr/bin/security",
+            arguments: ["find-generic-password", "-s", serviceName, "-w"]
+        ), !secret.isEmpty else {
+            return nil
+        }
+
+        return deriveClaudeDesktopKey(secret: secret)
+    }
+
+    private func normalizedCursorPercent(_ raw: Any?) -> Int? {
+        guard let raw else { return nil }
+        return clampPercentage(Int(doubleValue(raw).rounded()))
+    }
+
+    private func resolvedCursorTotalPercent(
+        plan: [String: Any]?,
+        autoPercent: Int?,
+        apiPercent: Int?
+    ) -> Int {
+        if let total = normalizedCursorPercent(plan?["totalPercentUsed"]) {
+            return total
+        }
+
+        if let autoPercent, let apiPercent {
+            return clampPercentage(Int((Double(autoPercent + apiPercent) / 2).rounded()))
+        }
+
+        if let apiPercent { return apiPercent }
+        if let autoPercent { return autoPercent }
+
+        let used = doubleValue(plan?["used"])
+        let limit = doubleValue(plan?["limit"])
+        guard limit > 0 else { return 0 }
+        return clampPercentage(Int(((used / limit) * 100).rounded()))
+    }
+
+    private func parseCursorRequestWindow(_ payload: [String: Any]?, resetDetail: String) -> CursorWindow? {
+        guard let payload,
+              let requestFamily = payload["gpt-4"] as? [String: Any] else {
+            return nil
+        }
+
+        let limit = integerValue(requestFamily["maxRequestUsage"])
+        guard limit > 0 else { return nil }
+
+        let used = max(integerValue(requestFamily["numRequestsTotal"]), integerValue(requestFamily["numRequests"]))
+        let percentage = clampPercentage(Int((Double(used) / Double(limit) * 100).rounded()))
+        let requestDetail = "\(used)/\(limit) req"
+
+        return CursorWindow(
+            label: "Req",
+            usedPercent: percentage,
+            detail: resetDetail == "--" ? requestDetail : "\(requestDetail) · \(resetDetail)"
+        )
+    }
+
+    private func resolvedCursorSecondaryWindow(
+        autoPercent: Int?,
+        apiPercent: Int?,
+        fallbackPercent: Int,
+        resetDetail: String
+    ) -> CursorWindow {
+        if let autoPercent {
+            return CursorWindow(label: "Auto", usedPercent: autoPercent, detail: resetDetail)
+        }
+
+        if let apiPercent {
+            return CursorWindow(label: "API", usedPercent: apiPercent, detail: resetDetail)
+        }
+
+        return CursorWindow(label: "Plan", usedPercent: fallbackPercent, detail: resetDetail)
+    }
+
+    private func cursorResetDetail(resetAt: TimeInterval?) -> String {
+        guard let resetAt else { return "--" }
+        return "Resets \(formatResetDeadline(timestamp: Int(resetAt)))"
+    }
+
+    private func cursorUsageSummary(
+        payload: [String: Any],
+        plan: [String: Any]?,
+        individualOnDemand: [String: Any]?,
+        teamOnDemand: [String: Any]?,
+        userInfo: [String: Any]?,
+        sourceLabel: String,
+        apiPercent: Int?
+    ) -> String? {
+        var parts: [String] = ["Cursor Web API via \(sourceLabel)"]
+
+        if let membershipType = nonEmptyString(payload["membershipType"]) {
+            parts.append("Plan \(membershipType.capitalized)")
+        }
+
+        if let apiPercent {
+            parts.append("API \(apiPercent)%")
+        }
+
+        let planUsed = doubleValue(plan?["used"]) / 100
+        let planLimit = doubleValue(plan?["limit"]) / 100
+        if planUsed > 0 || planLimit > 0 {
+            parts.append("Included \(formatUSD(planUsed))/\(formatUSD(planLimit))")
+        }
+
+        let onDemandUsed = doubleValue(individualOnDemand?["used"]) / 100
+        let onDemandLimit = doubleValue(individualOnDemand?["limit"]) / 100
+        if onDemandUsed > 0 || onDemandLimit > 0 {
+            let suffix = onDemandLimit > 0 ? "/\(formatUSD(onDemandLimit))" : ""
+            parts.append("On-demand \(formatUSD(onDemandUsed))\(suffix)")
+        }
+
+        let teamOnDemandUsed = doubleValue(teamOnDemand?["used"]) / 100
+        let teamOnDemandLimit = doubleValue(teamOnDemand?["limit"]) / 100
+        if teamOnDemandUsed > 0 || teamOnDemandLimit > 0 {
+            let suffix = teamOnDemandLimit > 0 ? "/\(formatUSD(teamOnDemandLimit))" : ""
+            parts.append("Team \(formatUSD(teamOnDemandUsed))\(suffix)")
+        }
+
+        if let email = nonEmptyString(userInfo?["email"]) {
+            parts.append(email)
+        }
+
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private func formatUSD(_ amount: Double) -> String {
+        String(format: "$%.2f", amount)
+    }
+
+    private func deriveClaudeDesktopKey(secret: String) -> Data? {
+        let password = Array(secret.utf8)
+        let salt = Array("saltysalt".utf8)
+        var derived = [UInt8](repeating: 0, count: kCCKeySizeAES128)
+        let status = CCKeyDerivationPBKDF(
+            CCPBKDFAlgorithm(kCCPBKDF2),
+            String(decoding: password, as: UTF8.self),
+            password.count,
+            salt,
+            salt.count,
+            CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA1),
+            1003,
+            &derived,
+            derived.count
+        )
+        guard status == kCCSuccess else { return nil }
+        return Data(derived)
+    }
+
+    private func dataFromHexString(_ hex: String) -> Data? {
+        let trimmed = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count.isMultiple(of: 2) else { return nil }
+
+        var data = Data(capacity: trimmed.count / 2)
+        var index = trimmed.startIndex
+        while index < trimmed.endIndex {
+            let nextIndex = trimmed.index(index, offsetBy: 2)
+            guard let byte = UInt8(trimmed[index..<nextIndex], radix: 16) else { return nil }
+            data.append(byte)
+            index = nextIndex
+        }
+        return data
+    }
+
+    private func stringFromHexString(_ hex: String) -> String? {
+        guard let data = dataFromHexString(hex) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private func decryptClaudeDesktopCache(encryptedData: Data, key: Data) -> Data? {
+        decryptChromiumCookieValue(encryptedData: encryptedData, key: key)
+    }
+
+    private func decryptChromiumCookieValue(encryptedData: Data, key: Data) -> Data? {
+        let prefix = Data("v10".utf8)
+        let ciphertext: Data
+        if encryptedData.starts(with: prefix) {
+            ciphertext = encryptedData.dropFirst(prefix.count)
+        } else {
+            ciphertext = encryptedData
+        }
+
+        let iv = Data(repeating: 0x20, count: kCCBlockSizeAES128)
+        var output = Data(count: ciphertext.count + kCCBlockSizeAES128)
+        let outputCapacity = output.count
+        var decryptedLength = 0
+
+        let status = output.withUnsafeMutableBytes { outputBytes in
+            ciphertext.withUnsafeBytes { cipherBytes in
+                key.withUnsafeBytes { keyBytes in
+                    iv.withUnsafeBytes { ivBytes in
+                        CCCrypt(
+                            CCOperation(kCCDecrypt),
+                            CCAlgorithm(kCCAlgorithmAES),
+                            CCOptions(kCCOptionPKCS7Padding),
+                            keyBytes.baseAddress,
+                            key.count,
+                            ivBytes.baseAddress,
+                            cipherBytes.baseAddress,
+                            ciphertext.count,
+                            outputBytes.baseAddress,
+                            outputCapacity,
+                            &decryptedLength
+                        )
+                    }
+                }
+            }
+        }
+
+        guard status == kCCSuccess else { return nil }
+        output.removeSubrange(decryptedLength..<output.count)
+        return output
+    }
+
+    private func extractClaudeSessionKey(from decrypted: Data) -> String? {
+        let decoded = String(decoding: decrypted, as: UTF8.self)
+        guard let range = decoded.range(of: #"sk-ant-[A-Za-z0-9_-]+"#, options: .regularExpression) else {
+            return nil
+        }
+        return String(decoded[range])
+    }
+
+    private func claudeQuotaSummary(sourceLabel: String, hasLocalHistory: Bool) -> String? {
+        guard hasLocalHistory else { return sourceLabel == "Claude Code OAuth" ? nil : sourceLabel }
+        if sourceLabel == "Claude Code OAuth" {
+            return "Quota + local token history"
+        }
+        return "\(sourceLabel) + local token history"
     }
 }
 

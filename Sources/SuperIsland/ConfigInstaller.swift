@@ -4,7 +4,7 @@ import Foundation
 
 private enum HookId {
     static let current = "superisland"
-    static let legacy = ["superisland", "vibenotch"]
+    static let legacy = ["superisland", "vibenotch", "vibe-island"]
     static func isOurs(_ s: String) -> Bool {
         let lowered = s.lowercased()
         return lowered.contains(current)

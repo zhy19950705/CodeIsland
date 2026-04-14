@@ -17,6 +17,10 @@ struct NotchPanelView: View {
     /// Delayed hover: prevents accidental expansion when mouse passes through
     @State private var hoverTimer: Timer?
     @State private var idleHovered = false
+    /// Track fullscreen state for adaptive hover behavior
+    @State private var isFullscreenActive = false
+    /// Track if mouse is in fullscreen reveal zone (top edge when hidden)
+    @State private var isInFullscreenRevealZone = false
     /// Curtain animation for tool status toggle
     @State private var curtainOffset: CGFloat = 0
     @State private var curtainOpacity: Double = 1
@@ -30,7 +34,10 @@ struct NotchPanelView: View {
     }
     /// Whether the bar content should be visible (respects hideWhenNoSession)
     private var showBar: Bool {
-        isActive && !(hideWhenNoSession && appState.activeSessionCount == 0)
+        isActive && !SessionVisibilityPolicy.shouldHideWhenNoSession(
+            hideWhenNoSession: hideWhenNoSession,
+            sessions: appState.sessions
+        )
     }
     private var shouldShowExpanded: Bool {
         showBar && appState.surface.isExpanded
@@ -203,14 +210,17 @@ struct NotchPanelView: View {
                     }
                 }
             }
-            .onAppear { displayedToolStatus = showToolStatus }
+            .onAppear {
+                displayedToolStatus = showToolStatus
+                updateFullscreenState()
+            }
             .contentShape(Rectangle())
             .onContinuousHover(coordinateSpace: .local) { phase in
                 switch phase {
                 case .active(let point):
                     handleActiveHover(at: point)
                 case .ended:
-                    handleHoverChange(false)
+                    handleHoverEnded()
                 }
             }
 
@@ -222,11 +232,36 @@ struct NotchPanelView: View {
     }
 
     private func handleActiveHover(at point: CGPoint) {
+        // Update fullscreen state for adaptive hover behavior
+        updateFullscreenState()
+
         if shouldIgnoreCollapsedNotchHover(localPoint: point) {
             cancelHoverTimer()
             return
         }
         handleHoverChange(true)
+    }
+
+    /// Update fullscreen state by checking with panel controller
+    private func updateFullscreenState() {
+        guard let delegate = NSApp.delegate as? AppDelegate,
+              let panelController = delegate.panelController else { return }
+
+        _ = isFullscreenActive
+        isFullscreenActive = panelController.isFullscreenEdgeRevealActive
+
+        // Check if mouse is in fullscreen reveal zone
+        let wasInRevealZone = isInFullscreenRevealZone
+        isInFullscreenRevealZone = panelController.isMouseInFullscreenRevealZone(
+            panelWidth: panelWidth,
+            notchWidth: notchW,
+            hasNotch: hasNotch
+        )
+
+        // If entering reveal zone, trigger hover immediately
+        if isInFullscreenRevealZone && !wasInRevealZone && !appState.surface.isExpanded {
+            handleHoverChange(true)
+        }
     }
 
     private func handleHoverChange(_ hovering: Bool) {
@@ -269,9 +304,14 @@ struct NotchPanelView: View {
         }
 
         if hovering {
-            // Delay expansion to avoid accidental triggers
+            if appState.surface.isExpanded {
+                cancelHoverTimer()
+                return
+            }
+            // Delay expansion to avoid accidental triggers (adaptive based on fullscreen state)
             cancelHoverTimer()
-            hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak appState] _ in
+            let delay = hoverActivationDelay
+            hoverTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak appState] _ in
                 Task { @MainActor in
                     withAnimation(NotchAnimation.open) {
                         appState?.surface = .sessionList
@@ -295,12 +335,33 @@ struct NotchPanelView: View {
         }
     }
 
+    private func handleHoverEnded() {
+        if shouldIgnoreExpandedHoverEnded() {
+            cancelHoverTimer()
+            return
+        }
+        handleHoverChange(false)
+    }
+
+    /// Adaptive hover activation delay based on fullscreen state
+    private var hoverActivationDelay: TimeInterval {
+        let settings = SettingsManager.shared
+        return isFullscreenActive
+            ? settings.fullscreenHoverActivationDelay
+            : settings.hoverActivationDelay
+    }
+
     private func cancelHoverTimer() {
         hoverTimer?.invalidate()
         hoverTimer = nil
     }
 
     private func shouldIgnoreCollapsedNotchHover(localPoint: CGPoint?) -> Bool {
+        // Check fullscreen reveal zone first - if in zone, don't ignore
+        if isInFullscreenRevealZone {
+            return false
+        }
+
         let ignoresHover = !shouldShowExpanded
         if let localPoint,
            Self.isInCollapsedNotchDeadZone(
@@ -315,6 +376,16 @@ struct NotchPanelView: View {
 
         guard let delegate = NSApp.delegate as? AppDelegate,
               let panelController = delegate.panelController else { return false }
+
+        // Check fullscreen reveal zone via panel controller
+        if panelController.isMouseInFullscreenRevealZone(
+            panelWidth: panelWidth,
+            notchWidth: notchW,
+            hasNotch: hasNotch
+        ) {
+            return false
+        }
+
         return panelController.isMouseInsideCollapsedNotchDeadZone(
             panelWidth: panelWidth,
             notchWidth: notchW,
@@ -322,6 +393,13 @@ struct NotchPanelView: View {
             hasNotch: hasNotch,
             ignoresHover: ignoresHover
         )
+    }
+
+    private func shouldIgnoreExpandedHoverEnded() -> Bool {
+        guard appState.surface.isExpanded,
+              let delegate = NSApp.delegate as? AppDelegate,
+              let panelController = delegate.panelController else { return false }
+        return panelController.isMouseInsidePanelFrame()
     }
 }
 
@@ -336,7 +414,7 @@ extension NotchPanelView {
         let sessionId = rotatingSessionId ?? activeSessionId ?? sessions.keys.sorted().first
         let source = sessionId.flatMap { sessions[$0]?.source } ?? primarySource
         guard let usageSource = UsageProviderSource(rawValue: source) else { return nil }
-        return snapshot.providers.first(where: { $0.source == usageSource })
+        return snapshot.providers.first(where: { $0.source == usageSource && $0.hasQuotaMetrics })
     }
 
     static func isInCollapsedNotchDeadZone(
@@ -350,6 +428,15 @@ extension NotchPanelView {
         let notchMinX = (panelWidth - notchWidth) / 2
         let notchMaxX = notchMinX + notchWidth
         return point.x >= notchMinX && point.x <= notchMaxX
+    }
+
+    static func shouldIgnoreExpandedHoverEnded(
+        mouseLocation: CGPoint,
+        panelFrame: CGRect?,
+        isExpanded: Bool
+    ) -> Bool {
+        guard isExpanded, let panelFrame else { return false }
+        return panelFrame.contains(mouseLocation)
     }
 }
 
@@ -392,11 +479,11 @@ private struct CompactLeftWing: View {
                                     color: selected ? Color(red: 0.3, green: 0.85, blue: 0.4) : .white.opacity(0.3),
                                     pixelSize: 1.3
                                 )
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 4)
+                                .frame(minWidth: 32, minHeight: 22)
                                 .background(
                                     Rectangle().fill(selected ? .white.opacity(0.1) : .clear)
                                 )
+                                .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                         }
@@ -542,9 +629,16 @@ struct CompactUsageBadge: View {
 
     private var primary: UsageWindowStat { provider.primary }
     private var tint: Color { Color(hex: primary.tintHex) }
-    private var label: String { l10n["usage_remaining"] }
+    private var label: String { provider.source.displaysUsedPercentage ? l10n["usage_used"] : l10n["usage_remaining"] }
+    private var displayedPercentage: Int {
+        provider.source.displaysUsedPercentage
+            ? provider.usedPercentage(for: primary)
+            : provider.remainingPercentage(for: primary)
+    }
     private var helpText: String {
-        let headline = "\(provider.source.title) \(primary.label) \(l10n["usage_used"]): \(provider.primaryUsedPercentage)% · \(l10n["usage_remaining"]): \(provider.primaryRemainingPercentage)%"
+        let usedPercentage = provider.usedPercentage(for: primary)
+        let remainingPercentage = provider.remainingPercentage(for: primary)
+        let headline = "\(provider.source.title) \(primary.label) \(l10n["usage_used"]): \(usedPercentage)% · \(l10n["usage_remaining"]): \(remainingPercentage)%"
         var lines = [headline, primary.detail]
         if let summary = provider.summary, !summary.isEmpty {
             lines.append(summary)
@@ -565,7 +659,7 @@ struct CompactUsageBadge: View {
                 .foregroundStyle(.white.opacity(0.55))
             Text(label.uppercased())
                 .foregroundStyle(.white.opacity(0.75))
-            Text("\(provider.primaryRemainingPercentage)%")
+            Text("\(displayedPercentage)%")
                 .foregroundStyle(tint)
         }
         .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
@@ -595,12 +689,17 @@ struct CompactUsageBadge: View {
 
 extension UsageProviderSnapshot {
     func remainingPercentage(for window: UsageWindowStat) -> Int {
+        guard hasQuotaMetrics else { return 0 }
         switch source {
-        case .claude:
-            max(0, min(100, 100 - window.percentage))
+        case .claude, .cursor:
+            return max(0, min(100, 100 - window.percentage))
         case .codex:
-            max(0, min(100, window.percentage))
+            return max(0, min(100, window.percentage))
         }
+    }
+
+    func usedPercentage(for window: UsageWindowStat) -> Int {
+        max(0, min(100, 100 - remainingPercentage(for: window)))
     }
 
     var primaryRemainingPercentage: Int {
@@ -608,7 +707,7 @@ extension UsageProviderSnapshot {
     }
 
     var primaryUsedPercentage: Int {
-        max(0, min(100, 100 - primaryRemainingPercentage))
+        usedPercentage(for: primary)
     }
 }
 
@@ -1305,11 +1404,13 @@ struct SessionListView: View {
 
     static func usesCompactRow(
         status: AgentStatus,
+        needsCompletionReview: Bool,
         sessionId: String,
         activeSessionId: String?,
         onlySessionId: String?
     ) -> Bool {
         guard onlySessionId == nil else { return false }
+        guard !needsCompletionReview else { return false }
         guard sessionId != activeSessionId else { return false }
 
         switch status {
@@ -1405,7 +1506,7 @@ struct SessionListView: View {
                             appState: appState,
                             sessionId: sessionId,
                             session: session,
-                            isCompletion: onlySessionId != nil,
+                            isCompletion: onlySessionId != nil || needsCompletionReview,
                             isSelected: sessionId == appState.activeSessionId,
                             needsCompletionReview: needsCompletionReview
                         )
@@ -1448,8 +1549,10 @@ struct SessionListView: View {
     }
 
     private func rowStyle(for sessionId: String, session: SessionSnapshot) -> SessionListRowStyle {
+        let needsCompletionReview = appState.needsCompletionReview(sessionId: sessionId)
         if Self.usesCompactRow(
             status: session.status,
+            needsCompletionReview: needsCompletionReview,
             sessionId: sessionId,
             activeSessionId: appState.activeSessionId,
             onlySessionId: onlySessionId
@@ -1581,18 +1684,15 @@ private struct SessionIdentityLine: View {
     let sessionFontSize: CGFloat
     let sessionColor: Color
     let dividerColor: Color
-    let cardHovering: Bool
 
     private var displaySessionId: String { session.displaySessionId(sessionId: sessionId) }
 
     var body: some View {
         HStack(spacing: 4) {
-            ProjectNameLink(
+            ProjectNameLabel(
                 name: session.projectDisplayName,
-                cwd: session.cwd,
                 fontSize: projectFontSize,
-                color: projectColor,
-                cardHovering: cardHovering
+                color: projectColor
             )
             .layoutPriority(2)
 
@@ -1622,12 +1722,10 @@ private struct SessionIdentityLine: View {
     }
 }
 
-private struct ProjectNameLink: View {
+private struct ProjectNameLabel: View {
     let name: String
-    let cwd: String?
     let fontSize: CGFloat
     let color: Color
-    let cardHovering: Bool
 
     var body: some View {
         Text(name)
@@ -1635,69 +1733,6 @@ private struct ProjectNameLink: View {
             .foregroundStyle(color)
             .lineLimit(1)
             .truncationMode(.tail)
-            .overlay(alignment: .bottom) {
-                if cwd != nil {
-                    GeometryReader { geo in
-                        Path { path in
-                            path.move(to: CGPoint(x: 0, y: geo.size.height))
-                            path.addLine(to: CGPoint(x: geo.size.width, y: geo.size.height))
-                        }
-                        .stroke(style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
-                        .foregroundStyle(color.opacity(cardHovering ? 0.5 : 0.2))
-                    }
-                }
-            }
-            .onTapGesture {
-                if let cwd = cwd {
-                    Self.openInEditor(cwd)
-                }
-            }
-            .help(cwd != nil ? L10n.shared["open_path"] : "")
-    }
-
-    private static let editorCandidates: [(executable: String, arguments: [String])] = [
-        ("code", ["--reuse-window"]),
-        ("cursor", ["--reuse-window"]),
-        ("windsurf", ["--reuse-window"]),
-    ]
-
-    private static func openInEditor(_ path: String) {
-        DispatchQueue.global(qos: .userInitiated).async {
-            for candidate in editorCandidates {
-                if let resolved = resolveExecutable(candidate.executable) {
-                    let process = Process()
-                    process.executableURL = URL(fileURLWithPath: resolved)
-                    process.arguments = candidate.arguments + [path]
-                    if (try? process.run()) != nil { return }
-                }
-            }
-            DispatchQueue.main.async {
-                NSWorkspace.shared.open(URL(fileURLWithPath: path))
-            }
-        }
-    }
-
-    private static func resolveExecutable(_ name: String) -> String? {
-        let paths = [
-            "/opt/homebrew/bin/\(name)",
-            "/usr/local/bin/\(name)",
-            "/usr/bin/\(name)",
-        ]
-        for path in paths {
-            if FileManager.default.isExecutableFile(atPath: path) { return path }
-        }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-        process.arguments = [name]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        guard (try? process.run()) != nil else { return nil }
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else { return nil }
-        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return output?.isEmpty == false ? output : nil
     }
 }
 
@@ -1750,12 +1785,12 @@ private struct SessionCard: View {
     @AppStorage(SettingsKey.aiMessageLines) private var aiMessageLines = SettingsDefaults.aiMessageLines
     @AppStorage(SettingsKey.showAgentDetails) private var showAgentDetails = SettingsDefaults.showAgentDetails
     private var fontSize: CGFloat { CGFloat(contentFontSize) }
-    private var aiLineLimit: Int? {
+    private var previewLineLimit: Int? {
         guard aiMessageLines > 0 else { return nil }
-        return isCompletion ? max(aiMessageLines, 5) : aiMessageLines
+        return isCompletion ? max(aiMessageLines, 5) : max(aiMessageLines, 3)
     }
     private var visibleMessages: [ChatMessage] {
-        return session.status != .idle ? Array(session.recentMessages.suffix(2)) : session.recentMessages
+        session.latestConversationPreviewMessages
     }
     private var pendingPermission: PermissionRequest? {
         guard appState.pendingPermission?.event.sessionId == sessionId else { return nil }
@@ -1807,8 +1842,7 @@ private struct SessionCard: View {
                         projectColor: statusNameColor,
                         sessionFontSize: fontSize,
                         sessionColor: .white.opacity(0.76),
-                        dividerColor: .white.opacity(0.28),
-                        cardHovering: hovering
+                        dividerColor: .white.opacity(0.28)
                     )
                     Spacer(minLength: 8)
 
@@ -1823,20 +1857,11 @@ private struct SessionCard: View {
                             SessionTag(L10n.shared["completion_pending_review"], color: completionReviewColor)
                         }
                         SessionTag(timeAgoText(session.lastActivity))
-                        TerminalJumpButton(session: session, sessionId: sessionId, appState: appState)
+                        TerminalJumpAccessory(session: session, isHovered: hovering)
                     }
                 }
 
-                if let prompt = session.lastUserPrompt,
-                   session.recentMessages.isEmpty {
-                    Text(prompt)
-                        .font(.system(size: fontSize, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.45))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-
-                if !session.recentMessages.isEmpty || session.status != .idle {
+                if !visibleMessages.isEmpty || session.status != .idle {
                     VStack(alignment: .leading, spacing: 3) {
                         ForEach(visibleMessages) { msg in
                             if msg.isUser {
@@ -1847,7 +1872,7 @@ private struct SessionCard: View {
                                     Text(ChatMessageTextFormatter.literalText(msg.text))
                                         .font(.system(size: fontSize, weight: .medium, design: .monospaced))
                                         .foregroundStyle(.white.opacity(0.9))
-                                        .lineLimit(1)
+                                        .lineLimit(previewLineLimit)
                                         .truncationMode(.tail)
                                 }
                             } else {
@@ -1858,7 +1883,7 @@ private struct SessionCard: View {
                                     Text(ChatMessageTextFormatter.inlineMarkdown(condensedMessagePreview(stripDirectives(msg.text))))
                                         .font(.system(size: fontSize, design: .monospaced))
                                         .foregroundStyle(.white.opacity(0.85))
-                                        .lineLimit(aiLineLimit)
+                                        .lineLimit(previewLineLimit)
                                         .truncationMode(.tail)
                                 }
                             }
@@ -1898,12 +1923,9 @@ private struct SessionCard: View {
         .padding(.horizontal, 6)
         .contentShape(Rectangle())
         .onHover { h in withAnimation(NotchAnimation.micro) { hovering = h } }
-        .onTapGesture(perform: handleTap)
-    }
-
-    private func handleTap() {
-        guard isCompletion else { return }
-        appState.jumpToSession(sessionId)
+        .onTapGesture {
+            appState.jumpToSession(sessionId)
+        }
     }
 
     private var cardBackgroundColor: Color {
@@ -1957,6 +1979,7 @@ private struct CompactSessionRow: View, Equatable {
     let isSelected: Bool
     let needsCompletionReview: Bool
     @State private var hovering = false
+    @AppStorage(SettingsKey.aiMessageLines) private var aiMessageLines = SettingsDefaults.aiMessageLines
 
     static func == (lhs: CompactSessionRow, rhs: CompactSessionRow) -> Bool {
         lhs.isSelected == rhs.isSelected
@@ -1978,6 +2001,11 @@ private struct CompactSessionRow: View, Equatable {
             needsCompletionReview: needsCompletionReview,
             ageText: timeAgoText(session.lastActivity)
         )
+    }
+
+    private var previewLineLimit: Int? {
+        guard aiMessageLines > 0 else { return nil }
+        return needsCompletionReview ? max(aiMessageLines, 5) : max(aiMessageLines, 3)
     }
 
     var body: some View {
@@ -2025,21 +2053,20 @@ private struct CompactSessionRow: View, Equatable {
                             SessionTag(L10n.shared["completion_pending_review"], color: completionReviewColor)
                         }
                         SessionTag(timeAgoText(session.lastActivity))
-                        TerminalJumpButton(session: session, sessionId: sessionId, appState: appState)
+                        TerminalJumpAccessory(session: session, isHovered: hovering)
                     }
                 }
 
-                HStack(spacing: 6) {
-                    Text(session.sourceLabel)
-                        .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(sourceColor)
-
+                HStack(alignment: .top, spacing: 6) {
                     if let previewText, !previewText.isEmpty {
                         Text(previewText)
                             .font(.system(size: 10.5, weight: .medium, design: .monospaced))
                             .foregroundStyle(.white.opacity(isSelected ? 0.72 : 0.54))
-                            .lineLimit(1)
+                            .lineLimit(previewLineLimit)
                             .truncationMode(.tail)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .layoutPriority(1)
                     } else if session.status != .idle {
                         Text("thinking")
                             .font(.system(size: 10.5, weight: .medium, design: .monospaced))
@@ -2068,8 +2095,7 @@ private struct CompactSessionRow: View, Equatable {
             }
         }
         .onTapGesture {
-            guard !isSelected else { return }
-            _ = appState.focusSession(sessionId: sessionId)
+            appState.jumpToSession(sessionId)
         }
     }
 
@@ -2113,17 +2139,6 @@ private struct CompactSessionRow: View, Equatable {
             return Color(red: 1.0, green: 0.6, blue: 0.2).opacity(0.92)
         case .idle:
             return .white.opacity(0.74)
-        }
-    }
-
-    private var sourceColor: Color {
-        switch session.status {
-        case .processing, .running:
-            return Color(red: 0.3, green: 0.85, blue: 0.4).opacity(isSelected ? 0.9 : 0.78)
-        case .waitingApproval, .waitingQuestion:
-            return Color(red: 1.0, green: 0.6, blue: 0.2).opacity(0.88)
-        case .idle:
-            return .white.opacity(isSelected ? 0.5 : 0.4)
         }
     }
 
@@ -2547,11 +2562,9 @@ private struct NotchPanelShape: Shape {
 }
 
 /// Collapsed single-line row for idle sessions >15 min
-private struct TerminalJumpButton: View {
+private struct TerminalJumpAccessory: View {
     let session: SessionSnapshot
-    let sessionId: String
-    let appState: AppState
-    @State private var hovering = false
+    let isHovered: Bool
 
     private let green = Color(red: 0.3, green: 0.85, blue: 0.4)
 
@@ -2579,36 +2592,28 @@ private struct TerminalJumpButton: View {
     }
 
     var body: some View {
-        Button {
-            appState.jumpToSession(sessionId)
-        } label: {
-            HStack(spacing: 4) {
-                if let icon = termIcon {
-                    Image(nsImage: icon)
-                        .resizable()
-                        .frame(width: 13, height: 13)
-                }
-                if let term = session.terminalName {
-                    Text(term)
-                        .font(.system(size: 9.5, weight: .medium, design: .monospaced))
-                        .foregroundStyle(green)
-                }
-                Image(systemName: "arrow.right")
-                    .font(.system(size: 7, weight: .bold))
-                    .foregroundStyle(green.opacity(hovering ? 1.0 : 0.5))
-                    .offset(x: hovering ? 2 : 0)
+        HStack(spacing: 4) {
+            if let icon = termIcon {
+                Image(nsImage: icon)
+                    .resizable()
+                    .frame(width: 13, height: 13)
             }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .background(
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(green.opacity(hovering ? 0.18 : 0.08))
-            )
+            if let term = session.terminalName {
+                Text(term)
+                    .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(green)
+            }
+            Image(systemName: "arrow.right")
+                .font(.system(size: 7, weight: .bold))
+                .foregroundStyle(green.opacity(isHovered ? 1.0 : 0.5))
+                .offset(x: isHovered ? 2 : 0)
         }
-        .buttonStyle(.plain)
-        .onHover { h in
-            withAnimation(.easeOut(duration: 0.15)) { hovering = h }
-        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(green.opacity(isHovered ? 0.18 : 0.08))
+        )
     }
 }
 

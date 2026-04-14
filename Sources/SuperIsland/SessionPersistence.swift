@@ -30,8 +30,21 @@ struct PersistedSession: Codable {
 }
 
 enum SessionPersistence {
-    private static let dirPath = FileManager.default.homeDirectoryForCurrentUser.path + "/.superisland"
-    private static let filePath = dirPath + "/sessions.json"
+    private static var overrideFileURLForTesting: URL?
+
+    private static var fileURL: URL {
+        if let overrideFileURLForTesting {
+            return overrideFileURLForTesting
+        }
+
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".superisland", isDirectory: true)
+            .appendingPathComponent("sessions.json", isDirectory: false)
+    }
+
+    private static var dirURL: URL {
+        fileURL.deletingLastPathComponent()
+    }
 
     static func save(_ sessions: [String: SessionSnapshot]) {
         let persisted: [PersistedSession] = sessions.compactMap { (id, s) in
@@ -66,22 +79,26 @@ enum SessionPersistence {
             )
         }
         do {
-            try FileManager.default.createDirectory(atPath: dirPath, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             let data = try encoder.encode(persisted)
-            try data.write(to: URL(fileURLWithPath: filePath), options: Data.WritingOptions.atomic)
+            try data.write(to: fileURL, options: Data.WritingOptions.atomic)
         } catch {}
     }
 
     static func load() -> [PersistedSession] {
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: filePath)) else { return [] }
+        guard let data = try? Data(contentsOf: fileURL) else { return [] }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return (try? decoder.decode([PersistedSession].self, from: data)) ?? []
     }
 
     static func clear() {
-        try? FileManager.default.removeItem(atPath: filePath)
+        try? FileManager.default.removeItem(at: fileURL)
+    }
+
+    static func useOverrideFileURLForTesting(_ url: URL?) {
+        overrideFileURLForTesting = url
     }
 }

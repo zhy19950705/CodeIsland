@@ -4,6 +4,12 @@ import os.log
 
 @MainActor
 final class UpdateChecker: ObservableObject {
+    struct AvailableUpdate {
+        let version: String
+        let releaseURL: String
+        let dmgURL: URL?
+    }
+
     static let shared = UpdateChecker()
     private nonisolated static let log = Logger(subsystem: "com.superisland", category: "UpdateChecker")
     private let defaultManifestURLString = "https://guandata-autotest-report.oss-cn-hangzhou.aliyuncs.com/cdn/superIsland/version.json"
@@ -12,6 +18,7 @@ final class UpdateChecker: ObservableObject {
     @Published var isDownloading = false
     @Published private(set) var downloadProgress: Double?
     @Published private(set) var updateStatusMessage = ""
+    @Published private(set) var availableUpdate: AvailableUpdate?
 
     private var currentVersion: String { AppVersion.current }
     private var progressWindowController: UpdateProgressWindowController?
@@ -76,15 +83,34 @@ final class UpdateChecker: ObservableObject {
                 let remote = manifest.version.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
                 let local = self.currentVersion
                 let releaseURL = manifest.releaseURL ?? manifest.downloadUrl ?? self.downloadPageURLString
+                let update = AvailableUpdate(
+                    version: remote,
+                    releaseURL: releaseURL,
+                    dmgURL: manifest.downloadUrl.flatMap(URL.init(string:))
+                )
 
                 if self.isNewer(remote: remote, local: local) {
-                    self.showUpdateAlert(remoteVersion: remote, releaseURL: releaseURL, dmgURL: manifest.downloadUrl)
+                    self.availableUpdate = update
+                    if !silent {
+                        self.showUpdateAlert(update)
+                    }
                 } else if !silent {
+                    self.availableUpdate = nil
                     self.showUpToDateAlert()
+                } else {
+                    self.availableUpdate = nil
                 }
             } catch {
                 Self.log.debug("Update check failed: \(error.localizedDescription)")
             }
+        }
+    }
+
+    func presentAvailableUpdateOrCheck() {
+        if let availableUpdate {
+            showUpdateAlert(availableUpdate)
+        } else {
+            checkForUpdates(silent: false)
         }
     }
 
@@ -100,9 +126,9 @@ final class UpdateChecker: ObservableObject {
         return false
     }
 
-    private func showUpdateAlert(remoteVersion: String, releaseURL: String, dmgURL: String?) {
+    private func showUpdateAlert(_ update: AvailableUpdate) {
         if isHomebrewInstall {
-            showHomebrewAlert(remoteVersion: remoteVersion)
+            showHomebrewAlert(remoteVersion: update.version)
             return
         }
 
@@ -113,7 +139,7 @@ final class UpdateChecker: ObservableObject {
 
         let alert = NSAlert()
         alert.messageText = L10n.shared["update_available_title"]
-        alert.informativeText = String(format: L10n.shared["update_available_body"], remoteVersion, currentVersion)
+        alert.informativeText = String(format: L10n.shared["update_available_body"], update.version, currentVersion)
         alert.alertStyle = .informational
         alert.addButton(withTitle: L10n.shared["update_now"])
         alert.addButton(withTitle: L10n.shared["later"])
@@ -126,11 +152,11 @@ final class UpdateChecker: ObservableObject {
         }
 
         if response == .alertFirstButtonReturn {
-            if let dmgURL, let downloadURL = URL(string: dmgURL) {
+            if let downloadURL = update.dmgURL {
                 Task {
-                    await self.performUpdate(dmgURL: downloadURL, releaseURL: releaseURL)
+                    await self.performUpdate(dmgURL: downloadURL, releaseURL: update.releaseURL)
                 }
-            } else if let url = URL(string: releaseURL) {
+            } else if let url = URL(string: update.releaseURL) {
                 NSWorkspace.shared.open(url)
             }
         }
@@ -233,6 +259,7 @@ final class UpdateChecker: ObservableObject {
         let dmgURLOnDisk = tempDir.appendingPathComponent("SuperIsland-update.dmg")
         let mountPoint = tempDir.appendingPathComponent("superisland-update-\(UUID().uuidString)").path
         let currentAppPath = Bundle.main.bundlePath
+        let installTargetPath = Self.resolveInstallTargetPath(currentAppPath: currentAppPath)
 
         do {
             updateProgress(message: L10n.shared["update_progress_prepare"], fractionCompleted: nil)
@@ -246,13 +273,14 @@ final class UpdateChecker: ObservableObject {
             try await Self.installAppFromDMG(
                 dmgPath: dmgURLOnDisk.path,
                 mountPoint: mountPoint,
-                currentAppPath: currentAppPath
+                targetAppPath: installTargetPath
             )
 
             updateProgress(message: L10n.shared["update_progress_relaunching"], fractionCompleted: nil)
+            availableUpdate = nil
 
-            Self.log.info("Relaunching app")
-            NSWorkspace.shared.open(URL(fileURLWithPath: currentAppPath))
+            Self.log.info("Scheduling relaunch for \(installTargetPath)")
+            try Self.scheduleRelaunch(appPath: installTargetPath)
             try await Task.sleep(nanoseconds: 500_000_000)
             NSApp.terminate(nil)
 
@@ -339,6 +367,44 @@ final class UpdateChecker: ObservableObject {
         return String(data: outputData, encoding: .utf8) ?? ""
     }
 
+    private nonisolated static func resolveInstallTargetPath(currentAppPath: String) -> String {
+        let currentURL = URL(fileURLWithPath: currentAppPath).standardizedFileURL
+        let normalizedPath = currentURL.path
+        let lowercasedPath = normalizedPath.lowercased()
+
+        if lowercasedPath.contains("/apptranslocation/") || lowercasedPath.hasPrefix("/volumes/") {
+            let appName = currentURL.lastPathComponent
+            let fm = FileManager.default
+            let candidates = [
+                URL(fileURLWithPath: NSHomeDirectory())
+                    .appendingPathComponent("Applications", isDirectory: true)
+                    .appendingPathComponent(appName, isDirectory: true)
+                    .path,
+                URL(fileURLWithPath: "/Applications", isDirectory: true)
+                    .appendingPathComponent(appName, isDirectory: true)
+                    .path,
+            ]
+
+            if let existing = candidates.first(where: { fm.fileExists(atPath: $0) }) {
+                return existing
+            }
+            return candidates[0]
+        }
+
+        return normalizedPath
+    }
+
+    private nonisolated static func scheduleRelaunch(appPath: String) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", "sleep 1; /usr/bin/open -n \(shellQuoted(appPath))"]
+        try process.run()
+    }
+
+    private nonisolated static func shellQuoted(_ value: String) -> String {
+        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
+    }
+
     fileprivate enum UpdateError: LocalizedError {
         case appNotFoundInDMG
         case downloadDidNotFinish
@@ -355,7 +421,7 @@ final class UpdateChecker: ObservableObject {
 }
 
 private extension UpdateChecker {
-    static func installAppFromDMG(dmgPath: String, mountPoint: String, currentAppPath: String) async throws {
+    static func installAppFromDMG(dmgPath: String, mountPoint: String, targetAppPath: String) async throws {
         try await Task.detached(priority: .userInitiated) {
             let fm = FileManager.default
 
@@ -384,11 +450,14 @@ private extension UpdateChecker {
                     )
                 }
 
-                Self.log.info("Replacing \(currentAppPath) with \(sourceAppPath)")
-                if fm.fileExists(atPath: currentAppPath) {
-                    try fm.removeItem(atPath: currentAppPath)
+                let targetParentPath = URL(fileURLWithPath: targetAppPath).deletingLastPathComponent().path
+                try fm.createDirectory(atPath: targetParentPath, withIntermediateDirectories: true)
+
+                Self.log.info("Replacing \(targetAppPath) with \(sourceAppPath)")
+                if fm.fileExists(atPath: targetAppPath) {
+                    try fm.removeItem(atPath: targetAppPath)
                 }
-                try fm.copyItem(atPath: sourceAppPath, toPath: currentAppPath)
+                _ = try Self.runProcess("/usr/bin/ditto", args: [sourceAppPath, targetAppPath])
             } catch {
                 _ = try? Self.runProcess("/usr/bin/hdiutil", args: ["detach", mountPoint, "-quiet"])
                 try? fm.removeItem(atPath: dmgPath)

@@ -43,6 +43,7 @@ final class SessionListViewTests: XCTestCase {
         XCTAssertFalse(
             SessionListView.usesCompactRow(
                 status: .running,
+                needsCompletionReview: false,
                 sessionId: "running",
                 activeSessionId: "selected",
                 onlySessionId: nil
@@ -52,6 +53,7 @@ final class SessionListViewTests: XCTestCase {
         XCTAssertFalse(
             SessionListView.usesCompactRow(
                 status: .processing,
+                needsCompletionReview: false,
                 sessionId: "processing",
                 activeSessionId: "selected",
                 onlySessionId: nil
@@ -63,8 +65,21 @@ final class SessionListViewTests: XCTestCase {
         XCTAssertTrue(
             SessionListView.usesCompactRow(
                 status: .idle,
+                needsCompletionReview: false,
                 sessionId: "idle",
                 activeSessionId: "selected",
+                onlySessionId: nil
+            )
+        )
+    }
+
+    func testUsesCompactRowKeepsPendingReviewSessionsExpanded() {
+        XCTAssertFalse(
+            SessionListView.usesCompactRow(
+                status: .idle,
+                needsCompletionReview: true,
+                sessionId: "done",
+                activeSessionId: nil,
                 onlySessionId: nil
             )
         )

@@ -138,3 +138,7 @@ This project was inspired by [claude-island](https://github.com/farouqaldori/cla
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
+
+
+## debug
+log show --predicate 'process == "SuperIsland"' --last 1h

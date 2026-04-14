@@ -3,7 +3,7 @@ import ServiceManagement
 
 enum AppVersion {
     /// Update this each release. Used as fallback when Info.plist is unavailable (debug builds).
-    static let fallback = "0.0.10"
+    static let fallback = "0.0.11"
 
     static var current: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? fallback
@@ -35,6 +35,10 @@ enum SettingsKey {
     static let hideWhenNoSession = "hideWhenNoSession"
     static let smartSuppress = "smartSuppress"
     static let collapseOnMouseLeave = "collapseOnMouseLeave"
+    static let hoverActivationDelay = "hoverActivationDelay"
+    static let fullscreenHoverActivationDelay = "fullscreenHoverActivationDelay"
+    static let fullscreenRevealZoneHeight = "fullscreenRevealZoneHeight"
+    static let fullscreenRevealZoneHorizontalInset = "fullscreenRevealZoneHorizontalInset"
     static let completionCardDisplaySeconds = "completionCardDisplaySeconds"
     static let sessionTimeout = "sessionTimeout"
 
@@ -89,8 +93,12 @@ struct SettingsDefaults {
     static let hideWhenNoSession = false
     static let smartSuppress = true
     static let collapseOnMouseLeave = true
+    static let hoverActivationDelay = 0.24
+    static let fullscreenHoverActivationDelay = 0.18
+    static let fullscreenRevealZoneHeight = 8.0
+    static let fullscreenRevealZoneHorizontalInset = 36.0
     static let completionCardDisplaySeconds = 10
-    static let sessionTimeout = 30
+    static let sessionTimeout = 1440
 
     static let maxPanelHeight = 560
     static let notchWidthOverride = 0
@@ -136,6 +144,10 @@ class SettingsManager {
             SettingsKey.hideWhenNoSession: SettingsDefaults.hideWhenNoSession,
             SettingsKey.smartSuppress: SettingsDefaults.smartSuppress,
             SettingsKey.collapseOnMouseLeave: SettingsDefaults.collapseOnMouseLeave,
+            SettingsKey.hoverActivationDelay: SettingsDefaults.hoverActivationDelay,
+            SettingsKey.fullscreenHoverActivationDelay: SettingsDefaults.fullscreenHoverActivationDelay,
+            SettingsKey.fullscreenRevealZoneHeight: SettingsDefaults.fullscreenRevealZoneHeight,
+            SettingsKey.fullscreenRevealZoneHorizontalInset: SettingsDefaults.fullscreenRevealZoneHorizontalInset,
             SettingsKey.completionCardDisplaySeconds: SettingsDefaults.completionCardDisplaySeconds,
             SettingsKey.sessionTimeout: SettingsDefaults.sessionTimeout,
             SettingsKey.maxPanelHeight: SettingsDefaults.maxPanelHeight,
@@ -227,6 +239,26 @@ class SettingsManager {
     var collapseOnMouseLeave: Bool {
         get { defaults.bool(forKey: SettingsKey.collapseOnMouseLeave) }
         set { defaults.set(newValue, forKey: SettingsKey.collapseOnMouseLeave) }
+    }
+
+    var hoverActivationDelay: Double {
+        get { defaults.double(forKey: SettingsKey.hoverActivationDelay) }
+        set { defaults.set(newValue, forKey: SettingsKey.hoverActivationDelay) }
+    }
+
+    var fullscreenHoverActivationDelay: Double {
+        get { defaults.double(forKey: SettingsKey.fullscreenHoverActivationDelay) }
+        set { defaults.set(newValue, forKey: SettingsKey.fullscreenHoverActivationDelay) }
+    }
+
+    var fullscreenRevealZoneHeight: Double {
+        get { defaults.double(forKey: SettingsKey.fullscreenRevealZoneHeight) }
+        set { defaults.set(newValue, forKey: SettingsKey.fullscreenRevealZoneHeight) }
+    }
+
+    var fullscreenRevealZoneHorizontalInset: Double {
+        get { defaults.double(forKey: SettingsKey.fullscreenRevealZoneHorizontalInset) }
+        set { defaults.set(newValue, forKey: SettingsKey.fullscreenRevealZoneHorizontalInset) }
     }
 
     var completionCardDisplaySeconds: Int {

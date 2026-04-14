@@ -340,6 +340,14 @@ private struct AIPage: View {
     private let codexAccountManager = CodexAccountManager()
     private let autoSwitchManager = CodexAutoSwitchLaunchAgentManager()
 
+    private enum UsageMonitorToolSection: String, CaseIterable, Identifiable {
+        case codex
+        case claude
+        case cursor
+
+        var id: String { rawValue }
+    }
+
     private static let loadingUsageMonitorSnapshot = UsageMonitorLaunchAgentSnapshot(
         state: .disabled,
         detail: "Loading...",
@@ -403,13 +411,8 @@ private struct AIPage: View {
                     }
                 }
 
-                if usageSnapshot.providers.isEmpty {
-                    Text(l10n["usage_snapshot_empty"])
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(usageSnapshot.providers) { provider in
-                        UsageProviderRow(provider: provider)
-                    }
+                ForEach(UsageMonitorToolSection.allCases) { tool in
+                    usageMonitorToolCard(tool)
                 }
             }
 
@@ -631,58 +634,199 @@ private struct AIPage: View {
         .formStyle(.grouped)
         .onAppear {
             Task {
-                await refreshUsage()
-                await refreshCodexAccounts()
+                // 使用独立的 Task 来隔离错误，避免一个失败影响另一个
+                await withTaskGroup(of: Void.self) { group in
+                    group.addTask {
+                        await refreshUsageWithTimeout()
+                    }
+                    group.addTask {
+                        await refreshCodexAccountsWithTimeout()
+                    }
+                }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UsageSnapshotStore.didUpdateNotification)) { _ in
-            Task { await refreshUsage() }
+            Task { await refreshUsageWithTimeout() }
+        }
+    }
+
+    @ViewBuilder
+    private func usageMonitorToolCard(_ tool: UsageMonitorToolSection) -> some View {
+        let provider = provider(for: tool)
+
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text(toolTitle(tool))
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+                if let provider, let updatedAtUnix = provider.updatedAtUnix {
+                    Text(RelativeDateTimeFormatter().localizedString(for: Date(timeIntervalSince1970: updatedAtUnix), relativeTo: Date()))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let provider {
+                UsageProviderRow(provider: provider, showHeader: false)
+            } else {
+                Text(toolEmptyMessage(tool))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white.opacity(0.03))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    // MARK: - Timeout Helpers
+
+    private struct TimeoutError: Error {}
+
+    private func withTimeout<T>(seconds: TimeInterval, operation: @escaping () async throws -> T) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            // 添加主任务
+            group.addTask {
+                try await operation()
+            }
+
+            // 添加超时任务
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw TimeoutError()
+            }
+
+            // 返回先完成的任务结果
+            let result = try await group.next()!
+            group.cancelAll()
+            return result
+        }
+    }
+
+    private func provider(for tool: UsageMonitorToolSection) -> UsageProviderSnapshot? {
+        let source: UsageProviderSource?
+        switch tool {
+        case .codex:
+            source = .codex
+        case .claude:
+            source = .claude
+        case .cursor:
+            source = .cursor
+        }
+
+        guard let source else { return nil }
+        return usageSnapshot.providers.first(where: { $0.source == source })
+    }
+
+    private func toolTitle(_ tool: UsageMonitorToolSection) -> String {
+        switch tool {
+        case .codex:
+            "Codex"
+        case .claude:
+            "Claude"
+        case .cursor:
+            "Cursor"
+        }
+    }
+
+    private func toolEmptyMessage(_ tool: UsageMonitorToolSection) -> String {
+        switch tool {
+        case .codex, .claude:
+            l10n["usage_snapshot_empty"]
+        case .cursor:
+            l10n["usage_cursor_unavailable"]
         }
     }
 
     @MainActor
     private func refreshUsage() async {
-        let payload = await Task.detached(priority: .userInitiated) {
-            let usageSnapshot = UsageSnapshotStore.load()
-            let monitorSnapshot = UsageMonitorLaunchAgentManager().snapshot()
+        await refreshUsageWithTimeout()
+    }
 
-            return (
-                usageSnapshot,
-                monitorSnapshot
-            )
-        }.value
-        usageSnapshot = payload.0
-        usageMonitorSnapshot = payload.1
+    @MainActor
+    private func refreshUsageWithTimeout(timeout: TimeInterval = 5.0) async {
+        do {
+            let payload = try await withTimeout(seconds: timeout) {
+                await Task.detached(priority: .userInitiated) {
+                    // 加载用量快照
+                    let usageSnapshot = UsageSnapshotStore.load()
+
+                    // 获取监控器状态
+                    let monitorSnapshot = UsageMonitorLaunchAgentManager().snapshot()
+
+                    return (usageSnapshot, monitorSnapshot)
+                }.value
+            }
+            usageSnapshot = payload.0
+            usageMonitorSnapshot = payload.1
+        } catch is TimeoutError {
+            usageStatusMessage = "加载超时，请检查文件访问权限"
+            usageStatusIsError = true
+        } catch {
+            usageStatusMessage = error.localizedDescription
+            usageStatusIsError = true
+        }
     }
 
     @MainActor
     private func refreshCodexAccounts() async {
-        do {
-            let payload = try await Task.detached(priority: .userInitiated) {
-                let accountManager = CodexAccountManager()
-                let status = try accountManager.status()
-                let accounts = try accountManager.listAccounts(syncCurrentAuth: false)
-                let autoSwitchSnapshot = CodexAutoSwitchLaunchAgentManager().snapshot()
+        await refreshCodexAccountsWithTimeout()
+    }
 
-                return (
-                    status,
-                    accounts,
-                    autoSwitchSnapshot
-                )
-            }.value
+    @MainActor
+    private func refreshCodexAccountsWithTimeout(timeout: TimeInterval = 5.0) async {
+        do {
+            let payload = try await withTimeout(seconds: timeout) {
+                await Task.detached(priority: .userInitiated) {
+                    let accountManager = CodexAccountManager()
+
+                    // 安全地获取状态，分步骤处理以避免单个操作卡住
+                    let status: CodexAccountManagerStatus?
+                    do {
+                        status = try accountManager.status()
+                    } catch {
+                        status = nil
+                    }
+
+                    let accounts: [CodexManagedAccount]
+                    do {
+                        accounts = try accountManager.listAccounts(syncCurrentAuth: false)
+                    } catch {
+                        accounts = []
+                    }
+
+                    let autoSwitchSnapshot = CodexAutoSwitchLaunchAgentManager().snapshot()
+
+                    return (status, accounts, autoSwitchSnapshot)
+                }.value
+            }
+
             codexStatus = payload.0
             codexAccounts = payload.1
             autoSwitchSnapshot = payload.2
-            autoSwitch5hThreshold = payload.0.registry.autoSwitch.threshold5hPercent
-            autoSwitchWeeklyThreshold = payload.0.registry.autoSwitch.thresholdWeeklyPercent
-            autoSwitchAPIUsageEnabled = payload.0.registry.api.usage
+
+            // 安全地设置阈值
+            if let status = payload.0 {
+                autoSwitch5hThreshold = status.registry.autoSwitch.threshold5hPercent
+                autoSwitchWeeklyThreshold = status.registry.autoSwitch.thresholdWeeklyPercent
+                autoSwitchAPIUsageEnabled = status.registry.api.usage
+            }
+        } catch is TimeoutError {
+            codexStatusMessage = "加载超时，请检查文件访问权限或 Codex 配置"
+            codexStatusIsError = true
+            // 使用默认快照
+            autoSwitchSnapshot = CodexAutoSwitchLaunchAgentSnapshot(
+                state: .disabled,
+                detail: "加载超时",
+                plistPath: ""
+            )
         } catch {
-            let fallbackSnapshot = await Task.detached(priority: .userInitiated) {
-                CodexAutoSwitchLaunchAgentManager().snapshot()
-            }.value
-            codexStatus = nil
-            codexAccounts = []
-            autoSwitchSnapshot = fallbackSnapshot
             codexStatusMessage = error.localizedDescription
             codexStatusIsError = true
         }
@@ -1394,6 +1538,7 @@ private struct IntegrationStateBadge: View {
 private struct UsageProviderRow: View {
     @ObservedObject private var l10n = L10n.shared
     let provider: UsageProviderSnapshot
+    var showHeader: Bool = true
     @State private var selectedHistoryPreset: UsageHistoryRangePreset = .recent30Days
 
     private var availableHistories: [UsageHistoryRangeSnapshot] {
@@ -1417,18 +1562,22 @@ private struct UsageProviderRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(provider.source.title)
-                Spacer()
-                if let updatedAtUnix = provider.updatedAtUnix {
-                    Text(relativeTime(updatedAtUnix))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            if showHeader {
+                HStack {
+                    Text(provider.source.title)
+                    Spacer()
+                    if let updatedAtUnix = provider.updatedAtUnix {
+                        Text(relativeTime(updatedAtUnix))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
-            HStack(spacing: 10) {
-                usageBadge(title: provider.primary.label, percentage: provider.primary.percentage, detail: provider.primary.detail)
-                usageBadge(title: provider.secondary.label, percentage: provider.secondary.percentage, detail: provider.secondary.detail)
+            if provider.hasQuotaMetrics {
+                HStack(spacing: 10) {
+                    usageBadge(title: provider.primary.label, percentage: provider.primary.percentage, detail: provider.primary.detail)
+                    usageBadge(title: provider.secondary.label, percentage: provider.secondary.percentage, detail: provider.secondary.detail)
+                }
             }
             if let summary = provider.summary, !summary.isEmpty {
                 Text(summary)
@@ -2099,8 +2248,9 @@ private struct AppearancePage: View {
     }
 }
 
-/// Live preview mimicking the real SessionCard layout.
+/// Live preview mimicking a completion-review session card.
 private struct AppearancePreview: View {
+    @ObservedObject private var l10n = L10n.shared
     let fontSize: Int
     let lineLimit: Int
     let showDetails: Bool
@@ -2108,12 +2258,16 @@ private struct AppearancePreview: View {
     private var fs: CGFloat { CGFloat(fontSize) }
     private let green = Color(red: 0.3, green: 0.85, blue: 0.4)
     private let aiColor = Color(red: 0.85, green: 0.47, blue: 0.34)
+    private var previewLineLimit: Int? {
+        guard lineLimit > 0 else { return nil }
+        return max(lineLimit, 5)
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
             // Column 1: Mascot
             VStack(spacing: 3) {
-                MascotView(source: "claude", status: .processing, size: 32)
+                MascotView(source: "claude", status: .idle, size: 32)
                 if showDetails {
                     HStack(spacing: 1) {
                         MiniAgentIcon(active: true, size: 8)
@@ -2129,8 +2283,14 @@ private struct AppearancePreview: View {
                 HStack(spacing: 6) {
                     Text("my-project")
                         .font(.system(size: fs + 2, weight: .bold, design: .monospaced))
-                        .foregroundStyle(green)
+                        .foregroundStyle(.white)
                     Spacer()
+                    Text(l10n["completion_pending_review"])
+                        .font(.system(size: max(9, fs - 1.5), weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(RoundedRectangle(cornerRadius: 4).fill(Color(red: 0.19, green: 0.58, blue: 0.91).opacity(0.78)))
                     Text("3m")
                         .font(.system(size: max(9, fs - 1.5), weight: .medium, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.7))
@@ -2146,7 +2306,7 @@ private struct AppearancePreview: View {
                         Text(">")
                             .font(.system(size: fs, weight: .bold, design: .monospaced))
                             .foregroundStyle(green)
-                        Text("Fix the login bug")
+                        Text("默认值改成 1 天")
                             .font(.system(size: fs, weight: .medium, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.9))
                             .lineLimit(1)
@@ -2156,21 +2316,12 @@ private struct AppearancePreview: View {
                         Text("$")
                             .font(.system(size: fs, weight: .bold, design: .monospaced))
                             .foregroundStyle(aiColor)
-                        Text("I've analyzed the codebase and found the issue in the authentication module. The token validation was skipping the expiry check when refreshing sessions.")
+                        Text("已改，默认值现在是 1 天。这个设置只会影响还没有写入 sessionTimeout 的用户；已经保存过该值的用户不会被自动迁移。")
                             .font(.system(size: fs, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.85))
-                            .lineLimit(lineLimit > 0 ? lineLimit : nil)
+                            .lineLimit(previewLineLimit)
                             .truncationMode(.tail)
-                    }
-                    // Working indicator
-                    HStack(spacing: 4) {
-                        Text("$")
-                            .font(.system(size: fs, weight: .bold, design: .monospaced))
-                            .foregroundStyle(aiColor)
-                        Text("Edit src/auth.ts")
-                            .font(.system(size: fs, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.75))
-                            .lineLimit(1)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 .padding(.leading, 4)

@@ -260,6 +260,7 @@ class PanelWindowController: NSObject, NSWindowDelegate {
             Task { @MainActor in
                 guard let self = self else { return }
                 self.refreshCurrentScreen()
+                self.updateFullscreenEdgeRevealState()
                 if self.isActiveSpaceFullscreen() {
                     self.fullscreenLatch = true
                     self.updateVisibility()
@@ -281,6 +282,7 @@ class PanelWindowController: NSObject, NSWindowDelegate {
             Task { @MainActor in
                 guard let self = self else { return }
                 self.refreshCurrentScreen()
+                self.updateFullscreenEdgeRevealState()
                 if !self.fullscreenLatch { self.updateVisibility() }
             }
         }
@@ -585,6 +587,7 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         fullscreenPoller = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] timer in
             Task { @MainActor in
                 guard let self = self else { timer.invalidate(); return }
+                self.updateFullscreenEdgeRevealState()
                 if !self.isActiveSpaceFullscreen() {
                     self.fullscreenLatch = false
                     self.updateVisibility()
@@ -609,7 +612,10 @@ class PanelWindowController: NSObject, NSWindowDelegate {
             return
         }
 
-        if settings.hideWhenNoSession && appState.activeSessionCount == 0 {
+        if SessionVisibilityPolicy.shouldHideWhenNoSession(
+            hideWhenNoSession: settings.hideWhenNoSession,
+            sessions: appState.sessions
+        ) {
             panel.orderOut(nil)
             return
         }
@@ -639,21 +645,57 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         )
     }
 
-    private func isActiveSpaceFullscreen() -> Bool {
-        guard let frontApp = NSWorkspace.shared.frontmostApplication,
-              frontApp.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return false }
+    private(set) var isFullscreenEdgeRevealActive = false
 
-        // Detect fullscreen by observing that the menu bar has disappeared on
-        // the target screen. macOS fullscreen always hides the menu bar on the
-        // host display, so `visibleFrame` becomes equal to `frame`.
-        //
-        // We deliberately avoid `CGWindowListCopyWindowInfo` here: on macOS
-        // 15+ polling that API causes the system to surface spurious "X wants
-        // to record your screen" prompts for whichever app is frontmost, and
-        // this method runs on a timer.
+    private func isActiveSpaceFullscreen() -> Bool {
         let screen = chosenScreen()
-        let menuBarGap = screen.frame.maxY - screen.visibleFrame.maxY
-        return menuBarGap < 1
+        return FullscreenAppDetector.isFullscreenAppActive(screenFrame: screen.frame)
+    }
+
+    /// Check if mouse is in the fullscreen reveal zone (top edge when panel is hidden)
+    func isMouseInFullscreenRevealZone(
+        panelWidth: CGFloat,
+        notchWidth: CGFloat,
+        hasNotch: Bool
+    ) -> Bool {
+        guard !hasNotch,
+              SettingsManager.shared.hideInFullscreen,
+              isFullscreenEdgeRevealActive else { return false }
+
+        let settings = SettingsManager.shared
+        let zoneHeight = settings.fullscreenRevealZoneHeight
+        let horizontalInset = settings.fullscreenRevealZoneHorizontalInset
+
+        let screen = chosenScreen()
+        let mouse = NSEvent.mouseLocation
+
+        // Reveal zone is a wide strip at the top center of the screen
+        let zoneWidth = panelWidth + (horizontalInset * 2)
+        let zoneRect = CGRect(
+            x: screen.frame.midX - zoneWidth / 2,
+            y: screen.frame.maxY - zoneHeight,
+            width: zoneWidth,
+            height: zoneHeight
+        )
+
+        return zoneRect.contains(mouse)
+    }
+
+    /// Update fullscreen edge reveal state based on current conditions
+    func updateFullscreenEdgeRevealState() {
+        let shouldUseEdgeReveal = SettingsManager.shared.hideInFullscreen
+            && !ScreenDetector.screenHasNotch(chosenScreen())
+            && isActiveSpaceFullscreen()
+
+        guard shouldUseEdgeReveal != isFullscreenEdgeRevealActive else { return }
+        isFullscreenEdgeRevealActive = shouldUseEdgeReveal
+
+        // If entering edge reveal mode and panel is open, close it
+        if shouldUseEdgeReveal, appState.surface.isExpanded {
+            withAnimation(NotchAnimation.close) {
+                appState.surface = .collapsed
+            }
+        }
     }
 
     /// Fast check: is the terminal running the active session the foreground app?
@@ -690,6 +732,11 @@ class PanelWindowController: NSObject, NSWindowDelegate {
             height: notchHeight
         )
         return notchRect.contains(mouse)
+    }
+
+    func isMouseInsidePanelFrame() -> Bool {
+        guard let panel else { return false }
+        return panel.frame.contains(NSEvent.mouseLocation)
     }
 
     func windowDidMove(_ notification: Notification) {

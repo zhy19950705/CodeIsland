@@ -1,4 +1,5 @@
 import SwiftUI
+import SuperIslandCore
 
 struct QuestionBar: View {
     let question: String
@@ -6,10 +7,12 @@ struct QuestionBar: View {
     let descriptions: [String]?
     let sessionSource: String?
     let sessionContext: String?
+    let session: SessionSnapshot?
     let queuePosition: Int
     let queueTotal: Int
     let onAnswer: (String) -> Void
     let onSkip: () -> Void
+    let onJump: (() -> Void)?
 
     @State private var textInput = ""
     @FocusState private var isFocused: Bool
@@ -17,26 +20,41 @@ struct QuestionBar: View {
 
     private let cyan = Color(red: 0.4, green: 0.7, blue: 1.0)
 
+    init(
+        question: String,
+        options: [String]?,
+        descriptions: [String]?,
+        sessionSource: String?,
+        sessionContext: String?,
+        session: SessionSnapshot? = nil,
+        queuePosition: Int,
+        queueTotal: Int,
+        onAnswer: @escaping (String) -> Void,
+        onSkip: @escaping () -> Void,
+        onJump: (() -> Void)? = nil
+    ) {
+        self.question = question
+        self.options = options
+        self.descriptions = descriptions
+        self.sessionSource = sessionSource
+        self.sessionContext = sessionContext
+        self.session = session
+        self.queuePosition = queuePosition
+        self.queueTotal = queueTotal
+        self.onAnswer = onAnswer
+        self.onSkip = onSkip
+        self.onJump = onJump
+    }
+
     var body: some View {
         VStack(spacing: 8) {
-            if sessionSource != nil || sessionContext != nil {
-                HStack(spacing: 5) {
-                    if let src = sessionSource, let icon = cliIcon(source: src, size: 12) {
-                        Image(nsImage: icon)
-                            .resizable()
-                            .frame(width: 12, height: 12)
-                    }
-                    if let cwd = sessionContext {
-                        Image(systemName: "folder.fill")
-                            .font(.system(size: 8))
-                            .foregroundStyle(.white.opacity(0.5))
-                        Text((cwd as NSString).lastPathComponent)
-                            .font(.system(size: 9, weight: .medium, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.6))
-                    }
-                    Spacer()
-                }
-                .padding(.horizontal, 14)
+            if session != nil || sessionSource != nil || sessionContext != nil {
+                // Prefer the tracked session snapshot so notification cards jump to
+                // the same terminal target and show the same metadata as session rows.
+                NotificationSessionHeader(
+                    session: session ?? fallbackSessionSnapshot,
+                    onJump: onJump
+                )
             }
 
             HStack(spacing: 6) {
@@ -118,6 +136,14 @@ struct QuestionBar: View {
         }
         .padding(.vertical, 10)
         .onAppear { isFocused = true }
+    }
+
+    private var fallbackSessionSnapshot: SessionSnapshot? {
+        guard session == nil, sessionSource != nil || sessionContext != nil else { return nil }
+        var snapshot = SessionSnapshot()
+        snapshot.source = sessionSource ?? snapshot.source
+        snapshot.cwd = sessionContext
+        return snapshot
     }
 }
 

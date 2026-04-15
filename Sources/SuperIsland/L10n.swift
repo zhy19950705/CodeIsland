@@ -155,6 +155,7 @@ final class L10n: ObservableObject {
         "skills_installed_search_placeholder": "Search installed and external skills",
         "skills_installed_search_results": "%d / %d skills shown",
         "skills_installed_search_empty": "No skills match the current search",
+        "skills_show_more": "Show %d More",
         "skills_update": "Update",
         "skills_update_all": "Update All From Source",
         "skills_adopt": "Import to Shared",
@@ -383,6 +384,7 @@ final class L10n: ObservableObject {
 
         // Menu
         "settings_ellipsis": "Settings...",
+        "close": "Close",
         "check_for_updates": "Check for Updates...",
         "check_for_updates_short": "Check Updates",
         "reinstall_hooks": "Reinstall Hooks",
@@ -567,6 +569,7 @@ final class L10n: ObservableObject {
         "skills_installed_search_placeholder": "搜索已安装和外部技能",
         "skills_installed_search_results": "显示 %d / %d 个 skill",
         "skills_installed_search_empty": "没有匹配当前搜索的 skill",
+        "skills_show_more": "再显示 %d 个",
         "skills_update": "更新",
         "skills_update_all": "从源仓库更新全部",
         "skills_adopt": "导入到共享库",
@@ -795,6 +798,7 @@ final class L10n: ObservableObject {
 
         // Menu
         "settings_ellipsis": "设置...",
+        "close": "关闭",
         "check_for_updates": "检查更新...",
         "check_for_updates_short": "检查更新",
         "reinstall_hooks": "重新安装 Hooks",

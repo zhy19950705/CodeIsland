@@ -6,6 +6,21 @@ import SuperIslandCore
 extension AIPage {
     struct TimeoutError: Error {}
 
+    @MainActor
+    func scheduleInitialRefresh() async {
+        // Let the AI tab paint once before kicking off background refresh work.
+        await Task.yield()
+        hasActivatedContent = true
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
+                await refreshUsageWithTimeout()
+            }
+            group.addTask {
+                await refreshCodexAccountsWithTimeout()
+            }
+        }
+    }
+
     func withTimeout<T>(seconds: TimeInterval, operation: @escaping () async throws -> T) async throws -> T {
         try await withThrowingTaskGroup(of: T.self) { group in
             // Run the requested operation and a timeout race in parallel so the settings UI never stalls indefinitely.
@@ -33,7 +48,7 @@ extension AIPage {
     func refreshUsageWithTimeout(timeout: TimeInterval = 5.0) async {
         do {
             let payload = try await withTimeout(seconds: timeout) {
-                await Task.detached(priority: .userInitiated) {
+                await Task.detached(priority: .utility) {
                     // Load snapshots off the main actor because these calls can touch disk and launchd state.
                     let usageSnapshot = UsageSnapshotStore.load()
                     let monitorSnapshot = UsageMonitorLaunchAgentManager().snapshot()
@@ -60,7 +75,7 @@ extension AIPage {
     func refreshCodexAccountsWithTimeout(timeout: TimeInterval = 5.0) async {
         do {
             let payload = try await withTimeout(seconds: timeout) {
-                await Task.detached(priority: .userInitiated) {
+                await Task.detached(priority: .utility) {
                     let accountManager = CodexAccountManager()
 
                     // Fetch status and accounts independently so one failure does not blank out the entire section.

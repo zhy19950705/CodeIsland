@@ -1,13 +1,16 @@
 import SwiftUI
+import SuperIslandCore
 
 struct ApprovalBar: View {
     let tool: String
     let toolInput: [String: Any]?
+    let session: SessionSnapshot?
     let queuePosition: Int
     let queueTotal: Int
     let onAllow: () -> Void
     let onAlwaysAllow: () -> Void
     let onDeny: () -> Void
+    let onJump: (() -> Void)?
 
     private var fileName: String? {
         guard let fp = toolInput?["file_path"] as? String else { return nil }
@@ -22,8 +25,32 @@ struct ApprovalBar: View {
         toolInput?["server_name"] as? String
     }
 
+    init(
+        tool: String,
+        toolInput: [String: Any]?,
+        session: SessionSnapshot? = nil,
+        queuePosition: Int,
+        queueTotal: Int,
+        onAllow: @escaping () -> Void,
+        onAlwaysAllow: @escaping () -> Void,
+        onDeny: @escaping () -> Void,
+        onJump: (() -> Void)? = nil
+    ) {
+        self.tool = tool
+        self.toolInput = toolInput
+        self.session = session
+        self.queuePosition = queuePosition
+        self.queueTotal = queueTotal
+        self.onAllow = onAllow
+        self.onAlwaysAllow = onAlwaysAllow
+        self.onDeny = onDeny
+        self.onJump = onJump
+    }
+
     var body: some View {
         VStack(spacing: 8) {
+            NotificationSessionHeader(session: session, onJump: onJump)
+
             HStack(spacing: 6) {
                 Text("!")
                     .font(.system(size: 11, weight: .bold, design: .monospaced))

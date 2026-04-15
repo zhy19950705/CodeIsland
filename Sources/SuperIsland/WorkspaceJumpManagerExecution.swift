@@ -18,6 +18,14 @@ extension WorkspaceJumpManager {
         runAppleScript(scriptForTerminal(path: url.path)) || openWithApplication(url, target: .terminal)
     }
 
+    func openShellCommandInITerm(_ command: String) -> Bool {
+        runAppleScript(scriptForITerm(command: command)) || activateApplication(target: .iTerm)
+    }
+
+    func openShellCommandInTerminal(_ command: String) -> Bool {
+        runAppleScript(scriptForTerminal(command: command)) || activateApplication(target: .terminal)
+    }
+
     func openInCodeCompatibleEditor(_ workspaceURL: URL, target: JumpTarget, sessionId: String?) -> Bool {
         if let uri = codeEditorURI(for: target, workspaceURL: workspaceURL, sessionId: sessionId),
            workspace.open(uri) {
@@ -326,6 +334,26 @@ extension WorkspaceJumpManager {
         """
     }
 
+    func scriptForITerm(command: String) -> String {
+        """
+        set targetCommand to "\(escapeAppleScript(command))"
+        tell application id "com.googlecode.iterm2"
+            activate
+            if (count of windows) is 0 then
+                set newWindow to (create window with default profile)
+                tell current session of current tab of newWindow
+                    write text targetCommand
+                end tell
+            else
+                tell current session of current window
+                    write text targetCommand
+                    select
+                end tell
+            end if
+        end tell
+        """
+    }
+
     func scriptForTerminal(path: String) -> String {
         """
         set targetPath to "\(escapeAppleScript(path))"
@@ -339,6 +367,25 @@ extension WorkspaceJumpManager {
                     do script ("cd " & quoted form of targetPath) in frontTab
                 else
                     do script ("cd " & quoted form of targetPath)
+                end if
+            end if
+        end tell
+        """
+    }
+
+    func scriptForTerminal(command: String) -> String {
+        """
+        set targetCommand to "\(escapeAppleScript(command))"
+        tell application id "com.apple.Terminal"
+            activate
+            if (count of windows) is 0 then
+                do script targetCommand
+            else
+                set frontTab to selected tab of front window
+                if busy of frontTab is false then
+                    do script targetCommand in frontTab
+                else
+                    do script targetCommand
                 end if
             end if
         end tell

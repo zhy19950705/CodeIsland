@@ -143,6 +143,19 @@ final class WorkspaceJumpManager {
         return workspace.open(workspaceURL)
     }
 
+    @discardableResult
+    func openResumeSession(for session: SessionSnapshot, sessionId: String) -> Bool {
+        guard let command = SessionResumeSupport.resumeCommand(for: session, sessionId: sessionId) else {
+            return openWorkspace(for: session, sessionId: sessionId)
+        }
+
+        // Resume commands need a scriptable terminal, so prefer iTerm when available and fall back to Terminal.app.
+        if isTargetAvailable(.iTerm), openShellCommandInITerm(command) {
+            return true
+        }
+        return openShellCommandInTerminal(command)
+    }
+
     func canResolveWorkspace(for session: SessionSnapshot) -> Bool {
         guard let cwd = session.cwd else { return false }
         return bestWorkspaceURL(for: cwd) != nil

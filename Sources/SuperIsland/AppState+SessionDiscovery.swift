@@ -6,6 +6,7 @@ extension AppState {
     func startSessionDiscovery() {
         Self.debugLog("startSessionDiscovery: entering")
         startCodexRefreshLoop()
+        claudeRealtimeTokenMonitor.start()
         sessionDiscoveryService.start(
             onCleanup: { [weak self] in
                 self?.cleanupIdleSessions()
@@ -37,9 +38,13 @@ extension AppState {
     func integrateDiscovered(_ discovered: [DiscoveredSession]) {
         var didAdd = false
         var discoveredCodex = false
+        var discoveredClaude = false
         for info in discovered {
             if info.source == "codex" {
                 discoveredCodex = true
+            }
+            if info.source == "claude" {
+                discoveredClaude = true
             }
             if SessionFilter.shouldIgnoreSession(source: info.source, cwd: info.cwd, termBundleId: nil) {
                 continue
@@ -94,12 +99,18 @@ extension AppState {
             activeSessionId = mostActiveSessionId()
         }
         refreshDerivedState()
+        if discoveredClaude {
+            Task { [weak self] in
+                await self?.claudeRealtimeTokenMonitor.refreshOnce()
+            }
+        }
         if discoveredCodex {
             requestCodexRefresh(minimumInterval: didAdd ? 0 : 2)
         }
     }
 
     func stopSessionDiscovery() {
+        claudeRealtimeTokenMonitor.stop()
         codexRefreshService.stop()
         sessionDiscoveryService.stop()
         for key in Array(processMonitors.keys) { stopMonitor(key) }

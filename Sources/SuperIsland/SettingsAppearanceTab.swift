@@ -13,21 +13,45 @@ struct AppearancePage: View {
     @AppStorage(SettingsKey.aiMessageLines) private var aiMessageLines = SettingsDefaults.aiMessageLines
     @AppStorage(SettingsKey.showAgentDetails) private var showAgentDetails = SettingsDefaults.showAgentDetails
     @AppStorage(SettingsKey.showToolStatus) private var showToolStatus = SettingsDefaults.showToolStatus
+    @AppStorage(SettingsKey.hardwareNotchMode) private var hardwareNotchMode = SettingsDefaults.hardwareNotchMode
+    @State private var notchStore = NotchCustomizationStore.shared
+
+    private var forceVirtualNotch: Binding<Bool> {
+        Binding(
+            get: { hardwareNotchMode == HardwareNotchMode.forceVirtual.rawValue },
+            set: { enabled in
+                let mode: HardwareNotchMode = enabled ? .forceVirtual : .auto
+                hardwareNotchMode = mode.rawValue
+                notchStore.update { $0.hardwareNotchMode = mode }
+            }
+        )
+    }
 
     private var customNotchWidthEnabled: Binding<Bool> {
         Binding(
-            get: { notchWidthOverride > 0 },
+            get: { currentScreenGeometry.customWidth > 0 },
             set: { enabled in
                 if enabled {
-                    notchWidthOverride = max(
+                    let width = max(
                         ScreenDetector.defaultManualNotchWidth(),
                         120
                     )
+                    notchWidthOverride = width
+                    updateCurrentScreenWidth(CGFloat(width))
                 } else {
                     notchWidthOverride = 0
+                    updateCurrentScreenWidth(0)
                 }
             }
         )
+    }
+
+    private var currentScreen: NSScreen {
+        ScreenSelector.shared.selectedScreen ?? ScreenDetector.preferredScreen
+    }
+
+    private var currentScreenGeometry: ScreenNotchGeometry {
+        notchStore.customization.geometry(for: currentScreen.notchScreenID)
     }
 
     var body: some View {
@@ -41,19 +65,36 @@ struct AppearancePage: View {
             }
 
             Section(l10n["panel"]) {
+                Toggle("Force virtual notch", isOn: forceVirtualNotch)
+                Text("Use a movable virtual island even on displays without a physical notch.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Button("Live edit notch") {
+                    notchStore.enterEditMode()
+                    SettingsManager.shared.hardwareNotchMode = HardwareNotchMode(rawValue: hardwareNotchMode) ?? .auto
+                }
+                Text("Adjust width, horizontal position, and virtual notch height directly on the active display.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 Toggle(l10n["custom_notch_width"], isOn: customNotchWidthEnabled)
-                if notchWidthOverride > 0 {
+                if currentScreenGeometry.customWidth > 0 {
                     HStack {
                         Text(l10n["notch_width"])
                         Spacer()
-                        Text("\(notchWidthOverride) pt")
+                        Text("\(Int(currentScreenGeometry.customWidth.rounded())) pt")
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
                     }
                     Slider(
                         value: Binding(
-                            get: { Double(notchWidthOverride) },
-                            set: { notchWidthOverride = Int($0) }
+                            get: { Double(currentScreenGeometry.customWidth) },
+                            set: {
+                                let width = Int($0)
+                                notchWidthOverride = width
+                                updateCurrentScreenWidth(CGFloat(width))
+                            }
                         ),
                         in: 120...360,
                         step: 1
@@ -101,6 +142,12 @@ struct AppearancePage: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private func updateCurrentScreenWidth(_ width: CGFloat) {
+        notchStore.updateGeometry(for: currentScreen.notchScreenID) { geometry in
+            geometry.customWidth = width
+        }
     }
 }
 

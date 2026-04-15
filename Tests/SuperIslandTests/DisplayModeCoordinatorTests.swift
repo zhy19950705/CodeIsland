@@ -23,6 +23,18 @@ final class DisplayModeCoordinatorTests: XCTestCase {
         )
     }
 
+    func testAutoResolvesToNotchWhenVirtualNotchModeIsForced() {
+        XCTAssertEqual(
+            DisplayModeCoordinator.resolveMode(
+                .auto,
+                hasPhysicalNotch: false,
+                screenCount: 1,
+                forceVirtualNotch: true
+            ),
+            .notch
+        )
+    }
+
     func testExplicitModesRemainUnchanged() {
         XCTAssertEqual(
             DisplayModeCoordinator.resolveMode(.notch, hasPhysicalNotch: false, screenCount: 1),

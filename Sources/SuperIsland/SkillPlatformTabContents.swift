@@ -8,7 +8,11 @@ struct SkillLibraryTabContent: View {
     @Bindable var viewModel: SkillPlatformViewModel
     @Binding var installedSearchQuery: String
     let sharedSkills: [InstalledSkill]
+    @Binding var sharedSkillRenderLimit: Int
+    let totalFilteredSharedSkillsCount: Int
     let filteredSharedSkills: [InstalledSkill]
+    @Binding var externalSkillRenderLimit: Int
+    let totalFilteredExternalSkillsCount: Int
     let filteredExternalSkills: [InstalledSkill]
     let installedSearchSummary: String
     let onDeleteRequest: (InstalledSkill) -> Void
@@ -30,7 +34,25 @@ struct SkillLibraryTabContent: View {
     }
 
     private var shouldShowExternalSkillsSection: Bool {
-        !filteredExternalSkills.isEmpty || !installedSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        totalFilteredExternalSkillsCount > 0 || !installedSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var shouldShowMoreSharedSkills: Bool {
+        installedSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && filteredSharedSkills.count < totalFilteredSharedSkillsCount
+    }
+
+    private var hiddenSharedSkillsCount: Int {
+        max(totalFilteredSharedSkillsCount - filteredSharedSkills.count, 0)
+    }
+
+    private var shouldShowMoreExternalSkills: Bool {
+        installedSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && filteredExternalSkills.count < totalFilteredExternalSkillsCount
+    }
+
+    private var hiddenExternalSkillsCount: Int {
+        max(totalFilteredExternalSkillsCount - filteredExternalSkills.count, 0)
     }
 
     private var installSection: some View {
@@ -136,6 +158,14 @@ struct SkillLibraryTabContent: View {
                         onDeleteRequest(skill)
                     }
                 }
+
+                if shouldShowMoreSharedSkills {
+                    Button(String(format: l10n["skills_show_more"], hiddenSharedSkillsCount)) {
+                        // Expand in-place so users can keep the grouped form look without paying the full first-render cost.
+                        sharedSkillRenderLimit += 24
+                    }
+                    .buttonStyle(.borderless)
+                }
             }
         }
     }
@@ -169,6 +199,14 @@ struct SkillLibraryTabContent: View {
                     } onDelete: {
                         onDeleteRequest(skill)
                     }
+                }
+
+                if shouldShowMoreExternalSkills {
+                    Button(String(format: l10n["skills_show_more"], hiddenExternalSkillsCount)) {
+                        // Expand external skills on demand because legacy folders can also produce many expensive rows.
+                        externalSkillRenderLimit += 24
+                    }
+                    .buttonStyle(.borderless)
                 }
             }
         }

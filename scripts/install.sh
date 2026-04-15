@@ -77,6 +77,7 @@ require_command curl
 require_command python3
 require_command hdiutil
 require_command ditto
+require_command xattr
 
 SOURCE_INPUT="${POSITIONAL_ARGS[0]:-$DEFAULT_MANIFEST_URL}"
 TARGET_DIR="${POSITIONAL_ARGS[1]:-$DEFAULT_TARGET_DIR}"
@@ -164,6 +165,10 @@ if [ -e "$TARGET_APP_PATH" ]; then
   run_install_command rm -rf "$TARGET_APP_PATH"
 fi
 run_install_command ditto "$SOURCE_APP_PATH" "$TARGET_APP_PATH"
+
+# Disk images downloaded from the internet propagate quarantine to the copied app bundle.
+# Clearing it here keeps the freshly installed app launchable after script-driven installs.
+run_install_command xattr -dr com.apple.quarantine "$TARGET_APP_PATH"
 
 echo
 echo "安装完成"

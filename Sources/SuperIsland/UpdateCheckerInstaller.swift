@@ -125,7 +125,16 @@ extension UpdateChecker {
         process.waitUntilExit()
 
         let outputData = pipe.fileHandleForReading.readDataToEndOfFile()
-        return String(data: outputData, encoding: .utf8) ?? ""
+        let output = String(data: outputData, encoding: .utf8) ?? ""
+        guard process.terminationStatus == 0 else {
+            // Bubble the subprocess failure up to the UI so failed installs do not masquerade as successful upgrades.
+            let reason = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw UpdateError.processFailed(
+                executable: executable,
+                reason: reason.isEmpty ? "Exited with status \(process.terminationStatus)." : reason
+            )
+        }
+        return output
     }
 
     nonisolated static func resolveInstallTargetPath(currentAppPath: String) -> String {
@@ -178,6 +187,7 @@ private extension UpdateChecker {
                     try fileManager.removeItem(atPath: targetAppPath)
                 }
                 _ = try Self.runProcess("/usr/bin/ditto", args: [sourceAppPath, targetAppPath])
+                try Self.clearQuarantineAttribute(at: targetAppPath)
             } catch {
                 _ = try? Self.runProcess("/usr/bin/hdiutil", args: ["detach", mountPoint, "-quiet"])
                 try? fileManager.removeItem(atPath: dmgPath)
@@ -189,6 +199,11 @@ private extension UpdateChecker {
             try? fileManager.removeItem(atPath: dmgPath)
             try? fileManager.removeItem(atPath: mountPoint)
         }.value
+    }
+
+    nonisolated static func clearQuarantineAttribute(at appPath: String) throws {
+        // DMG-installed apps inherit the download quarantine flag, so remove it before the relaunch step.
+        _ = try Self.runProcess("/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", appPath])
     }
 }
 

@@ -5,7 +5,8 @@ import SuperIslandCore
 // AIPage owns the state and async actions for usage monitoring and Codex account management.
 struct AIPage: View {
     @ObservedObject var l10n = L10n.shared
-    @State var usageSnapshot: UsageSnapshot = UsageSnapshotStore.load()
+    // Start from an empty snapshot so switching into the AI tab does not synchronously hit disk on the main thread.
+    @State var usageSnapshot: UsageSnapshot = .empty
     @State var usageMonitorSnapshot = Self.loadingUsageMonitorSnapshot
     @State var usageStatusMessage = ""
     @State var usageStatusIsError = false
@@ -21,6 +22,8 @@ struct AIPage: View {
     @State var autoSwitch5hThreshold = 10
     @State var autoSwitchWeeklyThreshold = 5
     @State var autoSwitchAPIUsageEnabled = true
+    @State var hasActivatedContent = false
+    @State private var hasScheduledInitialRefresh = false
 
     let usageMonitorManager = UsageMonitorLaunchAgentManager()
     let codexAccountManager = CodexAccountManager()
@@ -39,6 +42,27 @@ struct AIPage: View {
     )
 
     var body: some View {
+        Group {
+            if hasActivatedContent {
+                aiForm
+            } else {
+                AIPageLoadingPlaceholder()
+            }
+        }
+        .onAppear {
+            guard !hasScheduledInitialRefresh else { return }
+            hasScheduledInitialRefresh = true
+            Task(priority: .utility) {
+                await scheduleInitialRefresh()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UsageSnapshotStore.didUpdateNotification)) { _ in
+            Task { await refreshUsageWithTimeout() }
+        }
+    }
+
+    // Keep the heavy AI settings form behind a deferred activation step so tab switches stay responsive.
+    private var aiForm: some View {
         Form {
             Section(l10n["usage_monitor_section"]) {
                 AIUsageMonitorSection(
@@ -169,21 +193,5 @@ struct AIPage: View {
             }
         }
         .formStyle(.grouped)
-        .onAppear {
-            Task {
-                // 使用独立的 Task 来隔离错误，避免一个失败影响另一个
-                await withTaskGroup(of: Void.self) { group in
-                    group.addTask {
-                        await refreshUsageWithTimeout()
-                    }
-                    group.addTask {
-                        await refreshCodexAccountsWithTimeout()
-                    }
-                }
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UsageSnapshotStore.didUpdateNotification)) { _ in
-            Task { await refreshUsageWithTimeout() }
-        }
     }
 }

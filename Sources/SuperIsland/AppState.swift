@@ -46,6 +46,10 @@ final class AppState {
     var pendingQuestion: QuestionRequest? { questionQueue.first }
     var previewQuestionPayload: QuestionPayload?
     var previewApprovalPayload: ApprovalPreviewPayload?
+    /// Records why the island most recently opened so interaction policy can differ by trigger source.
+    var lastOpenReason: IslandOpenReason = .unknown
+    /// Persists the last meaningful expanded surface for reopen flows after a collapse.
+    var lastRestorableSurface: IslandSurface = .sessionList
     var surface: IslandSurface = .collapsed {
         didSet {
             guard oldValue != surface else { return }
@@ -70,6 +74,7 @@ final class AppState {
     let sessionTerminalIndexStore = SessionTerminalIndexStore()
     let codexRefreshService: CodexRefreshService
     let sessionDiscoveryService: SessionDiscoveryService
+    @ObservationIgnored lazy var claudeRealtimeTokenMonitor = ClaudeRealtimeTokenMonitor(appState: self)
     private var usageSnapshotObserver: NSObjectProtocol?
     private var codexPermissionObserver: NSObjectProtocol?
     private var codexQuestionObserver: NSObjectProtocol?

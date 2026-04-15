@@ -408,6 +408,9 @@ private final class FrozenUsageHistoryTableContainer: NSView {
         layer?.masksToBounds = true
         layer?.backgroundColor = NSColor.clear.cgColor
 
+        // Force a top-origin coordinate system so long tables do not start underneath the frozen header.
+        [headerLeftHost, headerRightHost, leftBodyHost, rightBodyHost].forEach { $0.isFlipped = true }
+
         [headerLeftViewport, headerRightViewport, leftBodyViewport].forEach { viewport in
             viewport.wantsLayer = true
             viewport.layer?.masksToBounds = true

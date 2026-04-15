@@ -73,9 +73,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 300_000_000)
                 if appState.surface == .collapsed {
-                    withAnimation(NotchAnimation.pop) {
-                        appState.surface = .sessionList
-                    }
+                    appState.openSessionList(reason: .boot, animation: NotchAnimation.pop)
                 }
             }
             return
@@ -175,25 +173,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let cwd = queryItems.first(where: { $0.name == "cwd" })?.value
         let source = queryItems.first(where: { $0.name == "source" })?.value
 
-        NSApp.activate(ignoringOtherApps: true)
-
         switch route {
         case "settings":
+            NSApp.activate(ignoringOtherApps: true)
             SettingsWindowController.shared.show()
         case "session":
-            if let sessionId, appState.focusSession(sessionId: sessionId) {
-                displayModeCoordinator?.revealPrimaryInterface()
+            // Session deeplinks should behave like tapping a session row: jump to the
+            // tracked terminal/editor target instead of only focusing the in-app card.
+            if let matchedSessionId = sessionId.flatMap({ appState.sessions[$0] != nil ? $0 : nil })
+                ?? appState.matchingSessionId(cwd: cwd, source: source) {
+                appState.jumpToSession(matchedSessionId)
                 return
             }
+
+            NSApp.activate(ignoringOtherApps: true)
             if appState.focusSession(cwd: cwd, source: source) != nil {
                 displayModeCoordinator?.revealPrimaryInterface()
             } else {
                 displayModeCoordinator?.revealPrimaryInterface()
-                withAnimation(NotchAnimation.open) {
-                    appState.surface = .sessionList
-                }
+                appState.openSessionList(reason: .deeplink)
             }
         default:
+            NSApp.activate(ignoringOtherApps: true)
             displayModeCoordinator?.revealPrimaryInterface()
         }
     }

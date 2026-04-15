@@ -141,49 +141,53 @@ struct HoverQuestionActions: View {
 }
 
 struct NotchPanelShape: Shape {
-    var topExtension: CGFloat
-    var bottomRadius: CGFloat
+    var shoulderExtension: CGFloat
+    var topCornerRadius: CGFloat
+    var bottomCornerRadius: CGFloat
     var minHeight: CGFloat = 0
 
-    var animatableData: AnimatablePair<CGFloat, CGFloat> {
-        get { AnimatablePair(topExtension, bottomRadius) }
+    var animatableData: AnimatablePair<CGFloat, AnimatablePair<CGFloat, CGFloat>> {
+        get {
+            AnimatablePair(
+                shoulderExtension,
+                AnimatablePair(topCornerRadius, bottomCornerRadius)
+            )
+        }
         set {
-            topExtension = newValue.first
-            bottomRadius = newValue.second
+            shoulderExtension = newValue.first
+            topCornerRadius = newValue.second.first
+            bottomCornerRadius = newValue.second.second
         }
     }
 
     func path(in rect: CGRect) -> Path {
-        let ext = topExtension
+        let ext = shoulderExtension
         let maxY = max(rect.maxY, rect.minY + minHeight)
-        let br = min(bottomRadius, rect.width / 4, (maxY - rect.minY) / 2)
-        let k: CGFloat = 0.62
+        let availableHeight = maxY - rect.minY
+        let topRadius = min(topCornerRadius, rect.width / 4, availableHeight / 2)
+        let bottomRadius = min(bottomCornerRadius, rect.width / 4, availableHeight / 2)
 
         var p = Path()
         p.move(to: CGPoint(x: rect.minX - ext, y: rect.minY))
         p.addLine(to: CGPoint(x: rect.maxX + ext, y: rect.minY))
-        p.addCurve(
-            to: CGPoint(x: rect.maxX, y: rect.minY + ext),
-            control1: CGPoint(x: rect.maxX + ext * 0.35, y: rect.minY),
-            control2: CGPoint(x: rect.maxX, y: rect.minY + ext * 0.35)
+        p.addQuadCurve(
+            to: CGPoint(x: rect.maxX, y: rect.minY + topRadius),
+            control: CGPoint(x: rect.maxX + ext, y: rect.minY + topRadius * 0.18)
         )
-        p.addLine(to: CGPoint(x: rect.maxX, y: maxY - br))
-        p.addCurve(
-            to: CGPoint(x: rect.maxX - br, y: maxY),
-            control1: CGPoint(x: rect.maxX, y: maxY - br * (1 - k)),
-            control2: CGPoint(x: rect.maxX - br * (1 - k), y: maxY)
+        p.addLine(to: CGPoint(x: rect.maxX, y: maxY - bottomRadius))
+        p.addQuadCurve(
+            to: CGPoint(x: rect.maxX - bottomRadius, y: maxY),
+            control: CGPoint(x: rect.maxX, y: maxY)
         )
-        p.addLine(to: CGPoint(x: rect.minX + br, y: maxY))
-        p.addCurve(
-            to: CGPoint(x: rect.minX, y: maxY - br),
-            control1: CGPoint(x: rect.minX + br * (1 - k), y: maxY),
-            control2: CGPoint(x: rect.minX, y: maxY - br * (1 - k))
+        p.addLine(to: CGPoint(x: rect.minX + bottomRadius, y: maxY))
+        p.addQuadCurve(
+            to: CGPoint(x: rect.minX, y: maxY - bottomRadius),
+            control: CGPoint(x: rect.minX, y: maxY)
         )
-        p.addLine(to: CGPoint(x: rect.minX, y: rect.minY + ext))
-        p.addCurve(
+        p.addLine(to: CGPoint(x: rect.minX, y: rect.minY + topRadius))
+        p.addQuadCurve(
             to: CGPoint(x: rect.minX - ext, y: rect.minY),
-            control1: CGPoint(x: rect.minX, y: rect.minY + ext * 0.35),
-            control2: CGPoint(x: rect.minX - ext * 0.35, y: rect.minY)
+            control: CGPoint(x: rect.minX - ext, y: rect.minY + topRadius * 0.18)
         )
         p.closeSubpath()
         return p
@@ -240,6 +244,55 @@ struct TerminalJumpAccessory: View {
             RoundedRectangle(cornerRadius: 5)
                 .fill(green.opacity(isHovered ? 0.18 : 0.08))
         )
+    }
+}
+
+struct SessionJumpButton: View {
+    let session: SessionSnapshot
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        // Reuse the session-row accessory so notification cards keep the same
+        // affordance and jump semantics as the list cards.
+        Button(action: action) {
+            TerminalJumpAccessory(session: session, isHovered: hovering)
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered in
+            withAnimation(NotchAnimation.micro) { hovering = isHovered }
+        }
+    }
+}
+
+struct NotificationSessionHeader: View {
+    let session: SessionSnapshot?
+    let onJump: (() -> Void)?
+
+    var body: some View {
+        if let session {
+            HStack(spacing: 5) {
+                if let icon = cliIcon(source: session.source, size: 12) {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .frame(width: 12, height: 12)
+                }
+                if let cwd = session.cwd {
+                    Image(systemName: "folder.fill")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.white.opacity(0.5))
+                    Text((cwd as NSString).lastPathComponent)
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                if let onJump {
+                    SessionJumpButton(session: session, action: onJump)
+                }
+            }
+            .padding(.horizontal, 14)
+        }
     }
 }
 

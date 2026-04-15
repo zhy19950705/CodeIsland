@@ -2,10 +2,12 @@ import SwiftUI
 
 struct SkillsPage: View {
     @ObservedObject private var l10n = L10n.shared
-    @State private var viewModel = SkillPlatformViewModel()
+    @Bindable var viewModel: SkillPlatformViewModel
     @State private var selectedTab: SkillsPageTab = .library
     @State private var skillPendingDeletion: InstalledSkill?
     @State private var installedSearchQuery = ""
+    @State private var sharedSkillRenderLimit = 24
+    @State private var externalSkillRenderLimit = 24
 
     var body: some View {
         VStack(spacing: 12) {
@@ -25,8 +27,12 @@ struct SkillsPage: View {
                         viewModel: viewModel,
                         installedSearchQuery: $installedSearchQuery,
                         sharedSkills: sharedSkills,
-                        filteredSharedSkills: filteredSharedSkills,
-                        filteredExternalSkills: filteredExternalSkills,
+                        sharedSkillRenderLimit: $sharedSkillRenderLimit,
+                        totalFilteredSharedSkillsCount: filteredSharedSkills.count,
+                        filteredSharedSkills: visibleSharedSkills,
+                        externalSkillRenderLimit: $externalSkillRenderLimit,
+                        totalFilteredExternalSkillsCount: filteredExternalSkills.count,
+                        filteredExternalSkills: visibleExternalSkills,
                         installedSearchSummary: installedSearchSummary
                     ) { skill in
                         skillPendingDeletion = skill
@@ -65,6 +71,21 @@ struct SkillsPage: View {
         .padding(.top, 8)
         .onAppear {
             viewModel.loadIfNeeded()
+            if selectedTab == .marketplace {
+                viewModel.loadMarketplaceIfNeeded()
+            }
+            resetRenderLimits()
+        }
+        .onChange(of: selectedTab) { _, newValue in
+            if newValue == .marketplace {
+                viewModel.loadMarketplaceIfNeeded()
+            }
+        }
+        .onChange(of: installedSearchQuery) { _, _ in
+            resetRenderLimits()
+        }
+        .onChange(of: viewModel.skills.count) { _, _ in
+            resetRenderLimits()
         }
         .confirmationDialog(
             l10n["skills_delete_confirm_title"],
@@ -135,6 +156,22 @@ struct SkillsPage: View {
         filteredSkills(from: externalSkills)
     }
 
+    private var visibleSharedSkills: [InstalledSkill] {
+        // Keep search exhaustive, but cap the default first paint so tab switches stay smooth with large libraries.
+        limitedSkills(
+            from: filteredSharedSkills,
+            limit: sharedSkillRenderLimit
+        )
+    }
+
+    private var visibleExternalSkills: [InstalledSkill] {
+        // Use the same cap for external skills because legacy agent folders can also be large.
+        limitedSkills(
+            from: filteredExternalSkills,
+            limit: externalSkillRenderLimit
+        )
+    }
+
     private var installedSearchSummary: String {
         String(
             format: l10n["skills_installed_search_results"],
@@ -179,6 +216,19 @@ struct SkillsPage: View {
 
             return tokens.allSatisfy { haystack.contains($0) }
         }
+    }
+
+    private func limitedSkills(from skills: [InstalledSkill], limit: Int) -> [InstalledSkill] {
+        guard installedSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return skills
+        }
+        return Array(skills.prefix(limit))
+    }
+
+    private func resetRenderLimits() {
+        // Reset caps when the dataset changes so the form stays responsive after installs, deletes, and searches.
+        sharedSkillRenderLimit = 24
+        externalSkillRenderLimit = 24
     }
 
     private func storageSearchTitle(for storageKind: SkillStorageKind) -> String {

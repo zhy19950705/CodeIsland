@@ -60,16 +60,18 @@ struct NotchExpandedContentView: View {
             .padding(.horizontal, 12)
 
         switch appState.surface {
-        case .approvalCard:
+        case .approvalCard(let sessionId):
             if let pending = appState.pendingPermission {
                 ApprovalBar(
                     tool: pending.event.toolName ?? "Unknown",
                     toolInput: pending.event.toolInput,
+                    session: appState.sessions[sessionId],
                     queuePosition: 1,
                     queueTotal: appState.permissionQueue.count,
                     onAllow: { appState.approvePermission(always: false) },
                     onAlwaysAllow: { appState.approvePermission(always: true) },
-                    onDeny: { appState.denyPermission() }
+                    onDeny: { appState.denyPermission() },
+                    onJump: { appState.jumpToSession(sessionId) }
                 )
                 .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
             } else if let preview = appState.previewApprovalPayload {
@@ -93,10 +95,12 @@ struct NotchExpandedContentView: View {
                     descriptions: question.question.descriptions,
                     sessionSource: session?.source,
                     sessionContext: session?.cwd,
+                    session: session,
                     queuePosition: 1,
                     queueTotal: appState.questionQueue.count,
                     onAnswer: { appState.answerQuestion($0) },
-                    onSkip: { appState.skipQuestion() }
+                    onSkip: { appState.skipQuestion() },
+                    onJump: { appState.jumpToSession(sessionId) }
                 )
                 .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
             } else if let preview = appState.previewQuestionPayload {

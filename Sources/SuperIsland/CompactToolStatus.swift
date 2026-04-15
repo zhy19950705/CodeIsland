@@ -44,7 +44,9 @@ struct CompactToolStatus: View {
         return trimmed
     }
 
-    private var hasActivity: Bool { toolLinger.shownTool != nil || displayStatus == .processing }
+    private var hasActivity: Bool {
+        toolLinger.shownTool != nil || displayStatus == .processing
+    }
 
     var body: some View {
         HStack(spacing: 5) {
@@ -56,6 +58,7 @@ struct CompactToolStatus: View {
             }
 
             if let tool = toolLinger.shownTool {
+                ProcessingSpinner(tint: toolStatusColor(tool), fontSize: 10.5)
                 TypingIndicator(fontSize: 11, label: tool, bright: true, color: toolStatusColor(tool))
                     .id("tool-\(tool)-\(appState.rotatingSessionId ?? "")")
                 if let desc = shownDesc {
@@ -64,6 +67,7 @@ struct CompactToolStatus: View {
                         .truncationMode(.tail)
                 }
             } else if displayStatus == .processing {
+                ProcessingSpinner(fontSize: 11)
                 TypingIndicator(fontSize: 11, label: "thinking", bright: true)
                     .id("thinking-\(appState.rotatingSessionId ?? "")")
             }

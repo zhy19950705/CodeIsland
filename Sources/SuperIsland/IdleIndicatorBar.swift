@@ -1,5 +1,4 @@
 import SwiftUI
-import AppKit
 import SuperIslandCore
 
 struct IdleIndicatorBar: View {
@@ -9,14 +8,16 @@ struct IdleIndicatorBar: View {
     let notchHeight: CGFloat
     let hasNotch: Bool
     let hovered: Bool
-    @ObservedObject private var l10n = L10n.shared
-    @AppStorage(SettingsKey.soundEnabled) private var soundEnabled = SettingsDefaults.soundEnabled
 
     var body: some View {
         HStack(spacing: 0) {
             HStack(spacing: 6) {
+                NeonPixelCatView()
+                    .opacity(hovered ? 1.0 : 0.72)
                 MascotView(source: "claude", status: .idle, size: mascotSize)
                     .opacity(hovered ? 0.9 : 0.5)
+                BuddyASCIIView()
+                    .opacity(hovered ? 0.9 : 0.55)
             }
             .padding(.leading, 6)
 
@@ -24,20 +25,11 @@ struct IdleIndicatorBar: View {
 
             if hovered {
                 HStack(spacing: 8) {
-                    Text("0")
-                        .font(.system(size: 13, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.4))
+                    BuddyASCIIView(tint: .white.opacity(0.8))
 
                     HStack(spacing: 4) {
-                        NotchIconButton(icon: soundEnabled ? "speaker.wave.2" : "speaker.slash", tooltip: soundEnabled ? l10n["mute"] : l10n["enable_sound_tooltip"]) {
-                            soundEnabled.toggle()
-                        }
-                        NotchIconButton(icon: "gearshape", tooltip: l10n["settings"]) {
-                            SettingsWindowController.shared.show()
-                        }
-                        NotchIconButton(icon: "power", tint: Color(red: 1.0, green: 0.4, blue: 0.4), tooltip: l10n["quit"]) {
-                            NSApplication.shared.terminate(nil)
-                        }
+                        // Reuse the expanded notch control cluster so idle hover state matches the active island state.
+                        NotchControlButtonGroup(showsSoundToggle: true, trailingAction: .quitApp)
                     }
                 }
                 .padding(.trailing, 6)

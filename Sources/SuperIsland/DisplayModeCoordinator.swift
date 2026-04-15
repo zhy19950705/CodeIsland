@@ -23,6 +23,8 @@ final class DisplayModeCoordinator {
 
         if currentResolvedMode() != .menuBar {
             panelController?.showPanel()
+            // Give the user a lightweight "island is alive" pulse on launch.
+            NotchActivityCoordinator.shared.showBootPulse()
         }
 
         applyCurrentMode(force: true)
@@ -142,7 +144,8 @@ final class DisplayModeCoordinator {
         return Self.resolveMode(
             SettingsManager.shared.displayMode,
             hasPhysicalNotch: selectedScreenHasPhysicalNotch(),
-            screenCount: ScreenSelector.shared.availableScreens.count
+            screenCount: ScreenSelector.shared.availableScreens.count,
+            forceVirtualNotch: SettingsManager.shared.hardwareNotchMode == .forceVirtual
         )
     }
 
@@ -154,28 +157,21 @@ final class DisplayModeCoordinator {
 
     private func toggleNotchSurface() {
         if appState.surface.isExpanded {
-            withAnimation(NotchAnimation.close) {
-                appState.surface = .collapsed
-            }
+            appState.collapseIsland(reason: .click)
         } else {
-            withAnimation(NotchAnimation.open) {
-                appState.surface = .sessionList
-                appState.cancelCompletionQueue()
-                if appState.activeSessionId == nil {
-                    appState.activeSessionId = appState.preferredSessionId
-                }
-            }
+            appState.openSessionList(reason: .click)
         }
     }
 
     nonisolated static func resolveMode(
         _ mode: DisplayMode,
         hasPhysicalNotch: Bool,
-        screenCount: Int
+        screenCount: Int,
+        forceVirtualNotch: Bool = false
     ) -> DisplayMode {
         _ = screenCount
 
         guard mode == .auto else { return mode }
-        return hasPhysicalNotch ? .notch : .menuBar
+        return hasPhysicalNotch || forceVirtualNotch ? .notch : .menuBar
     }
 }

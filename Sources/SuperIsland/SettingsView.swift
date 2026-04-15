@@ -68,6 +68,7 @@ struct SettingsView: View {
     @ObservedObject private var l10n = L10n.shared
     let appState: AppState?
     @State private var selectedPage: SettingsPage = .general
+    @State private var skillPlatformViewModel = SkillPlatformViewModel()
 
     init(appState: AppState? = nil) {
         self.appState = appState
@@ -100,7 +101,8 @@ struct SettingsView: View {
                 switch selectedPage {
                 case .general: GeneralPage()
                 case .ai: AIPage()
-                case .skills: SkillsPage()
+                // Keep the skills page model alive across page switches so local discovery does not restart each time.
+                case .skills: SkillsPage(viewModel: skillPlatformViewModel)
                 case .behavior: BehaviorPage()
                 case .appearance: AppearancePage()
                 case .mascots: MascotsPage()

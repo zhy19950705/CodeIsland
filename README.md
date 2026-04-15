@@ -89,6 +89,28 @@ swift run SuperIsland
 open .build/release/SuperIsland.app
 ```
 
+## Restoring Multiple cmux Panes
+
+If you keep separate Codex or Claude sessions in different `cmux` panes or tabs, restoring “the latest session” is not enough. This repo ships a helper script that binds:
+
+- the current workspace
+- pane order
+- tab order
+- tool / cwd / session id
+
+and then restores the whole workspace with `cmux respawn-pane`:
+
+```bash
+# Run once inside each target tab
+bash scripts/cmux-agent-session.sh bind --tool codex
+bash scripts/cmux-agent-session.sh bind --tool claude
+
+# After reopening cmux, restore the workspace
+bash scripts/cmux-agent-session.sh restore-workspace
+```
+
+See [docs/cmux-agent-session.md](docs/cmux-agent-session.md) for details.
+
 ## How It Works
 
 ```

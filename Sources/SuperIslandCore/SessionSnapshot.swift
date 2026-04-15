@@ -25,6 +25,14 @@ public struct SessionSnapshot {
     public var lastActivity: Date = Date()
     public var cwd: String?
     public var model: String?
+    /// Resolved Claude transcript path used by the realtime token monitor.
+    public var claudeTranscriptPath: String?
+    /// Recent Claude context token count from transcript usage blocks.
+    public var contextTokens: Int?
+    /// Recent Claude output token count from transcript usage blocks.
+    public var outputTokens: Int?
+    /// Claude context window size inferred from local settings.
+    public var contextWindowSize: Int?
     public var permissionMode: String?
     public var toolHistory: [ToolHistoryEntry] = []
     public var subagents: [String: SubagentState] = [:]

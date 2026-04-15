@@ -26,6 +26,7 @@ final class SkillPlatformViewModel {
 
     let manager: SkillManager
     private var didInitialLoad = false
+    var localRefreshTask: Task<Void, Never>?
     var skillUpdateRefreshTask: Task<Void, Never>?
 
     init(manager: SkillManager = SkillManager()) {
@@ -36,22 +37,16 @@ final class SkillPlatformViewModel {
         guard !didInitialLoad else { return }
         didInitialLoad = true
         refreshLocal()
-        Task {
-            await refreshMarketplace()
-        }
     }
 
     func refreshLocal() {
-        isRefreshingLocal = true
-        defer { isRefreshingLocal = false }
+        refreshLocalInBackground()
+    }
 
-        do {
-            skills = try manager.discoverSkills()
-            agentSnapshots = manager.agentSnapshots()
-            refreshSkillUpdateAvailability()
-        } catch {
-            publish(error)
-        }
+    // Centralize local snapshot application so helper files do not need write access to private(set) state.
+    func applyLocalSnapshot(_ snapshot: SkillPlatformLocalSnapshot) {
+        skills = snapshot.skills
+        agentSnapshots = snapshot.agentSnapshots
     }
 
     func refreshMarketplace() async {

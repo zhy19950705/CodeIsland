@@ -37,6 +37,7 @@ struct NotchPanelView: View {
     @State private var completionHasBeenEntered = false
     @State private var toolStatusTransitionTask: Task<Void, Never>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @StateObject private var activityCoordinator = NotchActivityCoordinator.shared
 
     private var isActive: Bool { !appState.sessions.isEmpty }
     /// First launch / no-session state should still render a visible marker so the app
@@ -86,11 +87,11 @@ struct NotchPanelView: View {
         if !isActive { return hasNotch ? notchW - 20 : notchW }
         if shouldShowExpanded { return min(max(notchW + 200, 580), maxWidth) }
         let wing = compactWingWidth
-        let extra: CGFloat = appState.status == .idle ? 0 : 20
+        let activityExtra = activityCoordinator.currentExtraWidth
         // Reserve space for tool status — proportional to screen width
         let toolExtra: CGFloat = displayedToolStatus ? (hasNotch ? screenWidth * 0.03 : screenWidth * 0.04) : 0
         let usageExtra: CGFloat = showCompactUsageBadge ? (hasNotch ? 76 : 90) : 0
-        return notchW + wing * 2 + extra + toolExtra + usageExtra
+        return notchW + wing * 2 + activityExtra + toolExtra + usageExtra
     }
 
     var body: some View {
@@ -119,8 +120,9 @@ struct NotchPanelView: View {
             .clipped()
             .background(
                 NotchPanelShape(
-                    topExtension: shouldShowExpanded ? 14 : 3,
-                    bottomRadius: shouldShowExpanded ? 24 : 12,
+                    shoulderExtension: shouldShowExpanded ? 14 : 3,
+                    topCornerRadius: shouldShowExpanded ? 18 : 6,
+                    bottomCornerRadius: shouldShowExpanded ? 24 : 12,
                     minHeight: notchHeight
                 )
                 .fill(.black)
@@ -133,6 +135,7 @@ struct NotchPanelView: View {
             .onAppear {
                 displayedToolStatus = showToolStatus
                 updateFullscreenState(force: true)
+                syncActivityState()
             }
             .onDisappear {
                 toolStatusTransitionTask?.cancel()
@@ -141,6 +144,16 @@ struct NotchPanelView: View {
             .onChange(of: appState.surface) { _, newValue in
                 _ = newValue
                 completionHasBeenEntered = false
+                syncActivityState()
+            }
+            .onChange(of: appState.status) { _, _ in
+                syncActivityState()
+            }
+            .onChange(of: appState.pendingPermission != nil) { _, _ in
+                syncActivityState()
+            }
+            .onChange(of: appState.pendingQuestion != nil) { _, _ in
+                syncActivityState()
             }
             .contentShape(Rectangle())
             .onContinuousHover(coordinateSpace: .local) { phase in
@@ -218,11 +231,9 @@ struct NotchPanelView: View {
             } else if completionHasBeenEntered {
                 // Mouse entered then left — allow collapse
                 cancelHoverTimer()
-                withAnimation(NotchAnimation.close) {
-                    appState.surface = .collapsed
-                    appState.cancelCompletionQueue()
+                appState.cancelCompletionQueue()
+                appState.collapseIsland(reason: .hover)
                 }
-            }
             return
         default: break
         }
@@ -247,13 +258,7 @@ struct NotchPanelView: View {
             let delay = hoverActivationDelay
             hoverTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak appState] _ in
                 Task { @MainActor in
-                    withAnimation(NotchAnimation.open) {
-                        appState?.surface = .sessionList
-                        appState?.cancelCompletionQueue()
-                        if appState?.activeSessionId == nil {
-                            appState?.activeSessionId = appState?.sessions.keys.sorted().first
-                        }
-                    }
+                    appState?.openSessionList(reason: .hover)
                 }
             }
         } else {
@@ -261,9 +266,7 @@ struct NotchPanelView: View {
             cancelHoverTimer()
             hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) { [weak appState] _ in
                 Task { @MainActor in
-                    withAnimation(NotchAnimation.close) {
-                        appState?.surface = .collapsed
-                    }
+                    appState?.collapseIsland(reason: .hover)
                 }
             }
         }
@@ -317,6 +320,15 @@ struct NotchPanelView: View {
         hoverTimer = nil
     }
 
+    private func syncActivityState() {
+        // Keep transient side expansion logic centralized and deterministic.
+        activityCoordinator.sync(
+            status: appState.status,
+            isExpanded: shouldShowExpanded,
+            hasBlockingCard: appState.pendingPermission != nil || appState.pendingQuestion != nil
+        )
+    }
+
     private func shouldIgnoreCollapsedNotchHover(localPoint: CGPoint?) -> Bool {
         // Check fullscreen reveal zone first - if in zone, don't ignore
         if isInFullscreenRevealZone {
@@ -361,42 +373,5 @@ struct NotchPanelView: View {
               let delegate = NSApp.delegate as? AppDelegate,
               let panelController = delegate.panelController else { return false }
         return panelController.isMouseInsidePanelFrame()
-    }
-}
-
-extension NotchPanelView {
-    static func compactUsageProvider(
-        from snapshot: UsageSnapshot,
-        sessions: [String: SessionSnapshot],
-        rotatingSessionId: String?,
-        activeSessionId: String?,
-        primarySource: String
-    ) -> UsageProviderSnapshot? {
-        let sessionId = rotatingSessionId ?? activeSessionId ?? sessions.keys.sorted().first
-        let source = sessionId.flatMap { sessions[$0]?.source } ?? primarySource
-        guard let usageSource = UsageProviderSource(rawValue: source) else { return nil }
-        return snapshot.providers.first(where: { $0.source == usageSource && $0.hasQuotaMetrics })
-    }
-
-    static func isInCollapsedNotchDeadZone(
-        point: CGPoint,
-        panelWidth: CGFloat,
-        notchWidth: CGFloat,
-        hasNotch: Bool,
-        ignoresHover: Bool
-    ) -> Bool {
-        guard hasNotch, ignoresHover, notchWidth > 0, panelWidth > notchWidth else { return false }
-        let notchMinX = (panelWidth - notchWidth) / 2
-        let notchMaxX = notchMinX + notchWidth
-        return point.x >= notchMinX && point.x <= notchMaxX
-    }
-
-    static func shouldIgnoreExpandedHoverEnded(
-        mouseLocation: CGPoint,
-        panelFrame: CGRect?,
-        isExpanded: Bool
-    ) -> Bool {
-        guard isExpanded, let panelFrame else { return false }
-        return panelFrame.contains(mouseLocation)
     }
 }

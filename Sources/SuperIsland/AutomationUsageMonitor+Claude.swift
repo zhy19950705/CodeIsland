@@ -14,12 +14,74 @@ extension UsageMonitorCommand {
         var sourceLabel: String
     }
 
+    // Accept a few known field variants so quota parsing survives minor API shape changes.
+    private func parseClaudeWindow(_ payload: [String: Any]) -> ClaudeWindow {
+        let utilization = firstClaudeUtilization(in: payload)
+        let resetAt = firstClaudeResetAt(in: payload)
+        return ClaudeWindow(utilization: utilization, resetAt: resetAt)
+    }
+
+    // Treat "all zero + no reset" as invalid so the UI falls back to local history instead of fake 0% badges.
+    private func isMeaningfulClaudeQuota(_ quota: ClaudeQuota) -> Bool {
+        let windows = [quota.primary, quota.secondary]
+        return windows.contains { $0.utilization > 0 || $0.resetAt != nil }
+    }
+
+    // Reuse the same validity rule for cached UI snapshots so stale fake-zero badges do not stick around.
+    private func isMeaningfulClaudeSnapshot(_ snapshot: UsageProviderSnapshot) -> Bool {
+        let windows = [snapshot.primary, snapshot.secondary]
+        return windows.contains { $0.percentage > 0 || $0.detail != "--" }
+    }
+
+    // Keep utilization parsing centralized because OAuth and web payloads may use slightly different keys.
+    private func firstClaudeUtilization(in payload: [String: Any]) -> Double {
+        let candidates: [Any?] = [
+            payload["utilization"],
+            payload["usage_ratio"],
+            payload["ratio"],
+            payload["used_ratio"],
+            payload["used_percent"],
+            payload["percent_used"],
+            payload["percentage"],
+            payload["value"],
+        ]
+
+        for candidate in candidates {
+            let value = AutomationUsageMonitorSupport.normalizedClaudeUtilization(candidate)
+            if value > 0 {
+                return value
+            }
+        }
+
+        // If the API explicitly reports 0, keep that signal only when a reset timestamp exists elsewhere.
+        return AutomationUsageMonitorSupport.normalizedClaudeUtilization(payload["utilization"])
+    }
+
+    // Support common timestamp aliases used by web and desktop APIs.
+    private func firstClaudeResetAt(in payload: [String: Any]) -> TimeInterval? {
+        let candidates: [Any?] = [
+            payload["resets_at"],
+            payload["reset_at"],
+            payload["resetsAt"],
+            payload["resetAt"],
+            payload["window_reset_at"],
+            payload["windowResetAt"],
+        ]
+
+        for candidate in candidates {
+            if let value = AutomationUsageMonitorSupport.parseTimestamp(candidate) {
+                return value
+            }
+        }
+        return nil
+    }
+
     func buildClaudeSnapshot(
         now: TimeInterval,
         previousSnapshot: UsageProviderSnapshot?,
         history: (monthly: UsageMonthlyStat?, history: [UsageHistoryRangeSnapshot])
     ) -> UsageProviderSnapshot? {
-        if let quota = fetchClaudeQuota() {
+        if let quota = fetchClaudeQuota(), isMeaningfulClaudeQuota(quota) {
             let primaryUsed = AutomationUsageMonitorSupport.clampPercentage(Int((quota.primary.utilization * 100).rounded()))
             let secondaryUsed = AutomationUsageMonitorSupport.clampPercentage(Int((quota.secondary.utilization * 100).rounded()))
             return UsageProviderSnapshot(
@@ -49,6 +111,7 @@ extension UsageMonitorCommand {
 
         if let previousSnapshot,
            previousSnapshot.hasQuotaMetrics,
+           isMeaningfulClaudeSnapshot(previousSnapshot),
            let updatedAtUnix = previousSnapshot.updatedAtUnix,
            now - updatedAtUnix <= 6 * 60 * 60 {
             return UsageProviderSnapshot(
@@ -103,14 +166,8 @@ extension UsageMonitorCommand {
            let fiveHour = payload["five_hour"] as? [String: Any],
            let sevenDay = payload["seven_day"] as? [String: Any] {
             return ClaudeQuota(
-                primary: ClaudeWindow(
-                    utilization: AutomationUsageMonitorSupport.normalizedClaudeUtilization(fiveHour["utilization"]),
-                    resetAt: AutomationUsageMonitorSupport.parseTimestamp(fiveHour["resets_at"])
-                ),
-                secondary: ClaudeWindow(
-                    utilization: AutomationUsageMonitorSupport.normalizedClaudeUtilization(sevenDay["utilization"]),
-                    resetAt: AutomationUsageMonitorSupport.parseTimestamp(sevenDay["resets_at"])
-                ),
+                primary: parseClaudeWindow(fiveHour),
+                secondary: parseClaudeWindow(sevenDay),
                 sourceLabel: "Claude Code OAuth"
             )
         }
@@ -170,14 +227,8 @@ extension UsageMonitorCommand {
         }
 
         return ClaudeQuota(
-            primary: ClaudeWindow(
-                utilization: AutomationUsageMonitorSupport.normalizedClaudeUtilization(fiveHour["utilization"]),
-                resetAt: AutomationUsageMonitorSupport.parseTimestamp(fiveHour["resets_at"])
-            ),
-            secondary: ClaudeWindow(
-                utilization: AutomationUsageMonitorSupport.normalizedClaudeUtilization(sevenDay["utilization"]),
-                resetAt: AutomationUsageMonitorSupport.parseTimestamp(sevenDay["resets_at"])
-            ),
+            primary: parseClaudeWindow(fiveHour),
+            secondary: parseClaudeWindow(sevenDay),
             sourceLabel: "Claude Web API"
         )
     }

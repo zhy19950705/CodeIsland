@@ -1,13 +1,10 @@
 import SwiftUI
-import AppKit
 import SuperIslandCore
 
 struct CompactRightWing: View {
     var appState: AppState
     let expanded: Bool
     let hasNotch: Bool
-    @ObservedObject private var l10n = L10n.shared
-    @AppStorage(SettingsKey.soundEnabled) private var soundEnabled = SettingsDefaults.soundEnabled
     @AppStorage(SettingsKey.showToolStatus) private var showToolStatus = SettingsDefaults.showToolStatus
 
     private var displaySessionId: String? {
@@ -16,6 +13,10 @@ struct CompactRightWing: View {
     private var displaySource: String {
         guard let sid = displaySessionId else { return appState.primarySource }
         return appState.sessions[sid]?.source ?? appState.primarySource
+    }
+    private var displaySession: SessionSnapshot? {
+        guard let sid = displaySessionId else { return nil }
+        return appState.sessions[sid]
     }
     private var usageProvider: UsageProviderSnapshot? {
         NotchPanelView.compactUsageProvider(
@@ -26,19 +27,17 @@ struct CompactRightWing: View {
             primarySource: displaySource
         )
     }
+    // Prefer Claude's live transcript context badge over the quota badge when a Claude session is frontmost.
+    private var claudeContextLabel: String? {
+        guard displaySource == "claude" else { return nil }
+        return displaySession?.claudeContextBadgeText
+    }
 
     var body: some View {
         HStack(spacing: 6) {
             if expanded {
-                NotchIconButton(icon: soundEnabled ? "speaker.wave.2" : "speaker.slash", tooltip: soundEnabled ? l10n["mute"] : l10n["enable_sound_tooltip"]) {
-                    soundEnabled.toggle()
-                }
-                NotchIconButton(icon: "gearshape", tooltip: l10n["settings"]) {
-                    SettingsWindowController.shared.show()
-                }
-                NotchIconButton(icon: "power", tint: Color(red: 1.0, green: 0.4, blue: 0.4), tooltip: l10n["quit"]) {
-                    NSApplication.shared.terminate(nil)
-                }
+                // Reuse the shared notch controls so every surface keeps the same spacing and hover behavior.
+                NotchControlButtonGroup(showsSoundToggle: true, trailingAction: .quitApp)
             } else {
                 if appState.status == .waitingApproval || appState.status == .waitingQuestion {
                     Image(systemName: "bell.fill")
@@ -47,7 +46,9 @@ struct CompactRightWing: View {
                         .symbolEffect(.pulse, options: .repeating)
                 }
 
-                if let usageProvider {
+                if let claudeContextLabel, let displaySession {
+                    CompactClaudeContextBadge(session: displaySession, label: claudeContextLabel)
+                } else if let usageProvider {
                     CompactUsageBadge(provider: usageProvider)
                 }
 
@@ -131,6 +132,56 @@ struct CompactUsageBadge: View {
             return String(format: "%.1fK", Double(totalTokens) / 1_000)
         }
         return "\(totalTokens)"
+    }
+}
+
+// Keep the Claude realtime badge visually aligned with the existing quota badge so provider-specific status lands in one place.
+struct CompactClaudeContextBadge: View {
+    let session: SessionSnapshot
+    let label: String
+
+    private var tint: Color {
+        guard let percent = session.claudeContextUsagePercent else {
+            return .white.opacity(0.72)
+        }
+        if percent >= 85 {
+            return Color(red: 1.0, green: 0.45, blue: 0.35)
+        }
+        if percent >= 65 {
+            return Color(red: 1.0, green: 0.7, blue: 0.2)
+        }
+        return Color(red: 0.3, green: 0.85, blue: 0.4)
+    }
+    private var helpText: String {
+        var lines = ["Claude live context: \(label)"]
+        if let detail = session.claudeTokenDetailText, detail != label {
+            lines.append(detail)
+        }
+        if let transcriptPath = session.claudeTranscriptPath, !transcriptPath.isEmpty {
+            lines.append(transcriptPath)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Text("CLAUDE")
+                .foregroundStyle(.white.opacity(0.55))
+            Text(label.uppercased())
+                .foregroundStyle(tint)
+        }
+        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(
+            Capsule(style: .continuous)
+                .fill(.white.opacity(0.08))
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .strokeBorder(tint.opacity(0.35), lineWidth: 1)
+        )
+        .help(helpText)
     }
 }
 

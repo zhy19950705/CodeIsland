@@ -78,6 +78,7 @@ enum UpdateShell {
 enum UpdateError: LocalizedError {
     case appNotFoundInDMG
     case downloadDidNotFinish
+    case processFailed(executable: String, reason: String)
 
     var errorDescription: String? {
         switch self {
@@ -85,6 +86,8 @@ enum UpdateError: LocalizedError {
             return "Could not find the app bundle in the downloaded disk image."
         case .downloadDidNotFinish:
             return "The update download finished without a disk image."
+        case let .processFailed(executable, reason):
+            return "\(executable) failed: \(reason)"
         }
     }
 }

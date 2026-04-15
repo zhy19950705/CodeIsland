@@ -103,6 +103,28 @@ swift build && open .build/debug/SuperIsland.app
 open .build/release/SuperIsland.app
 ```
 
+## cmux 多 Pane 恢复
+
+如果你在 `cmux` 里同时开了多个 `codex` / `claude` pane 或 tab，不能只靠“最近一次会话”恢复。仓库里附带了一个绑定脚本，可以把：
+
+- 当前 workspace
+- pane 顺序
+- tab 顺序
+- tool / cwd / session id
+
+一起持久化，然后批量恢复：
+
+```bash
+# 先在每个目标标签里做一次绑定
+bash scripts/cmux-agent-session.sh bind --tool codex
+bash scripts/cmux-agent-session.sh bind --tool claude
+
+# 重新进入 cmux 后，在该 workspace 一次性恢复
+bash scripts/cmux-agent-session.sh restore-workspace
+```
+
+详细说明见 [docs/cmux-agent-session.md](docs/cmux-agent-session.md)。
+
 ## 工作原理
 
 ```text

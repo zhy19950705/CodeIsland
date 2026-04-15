@@ -90,6 +90,11 @@ extension AppState {
         if sessions[sessionId]?.source == "codex" {
             requestCodexRefresh(minimumInterval: 1.0)
         }
+        if sessions[sessionId]?.source == "claude" {
+            Task { [weak self] in
+                await self?.claudeRealtimeTokenMonitor.refreshOnce()
+            }
+        }
 
         if sessions[sessionId]?.status == .idle && activeSessionId == sessionId {
             activeSessionId = mostActiveSessionId()
@@ -146,7 +151,8 @@ extension AppState {
 
         if permissionQueue.count == 1 {
             activeSessionId = sessionId
-            surface = .approvalCard(sessionId: sessionId)
+            // Blocking cards should restore cleanly after collapse/reopen.
+            presentSurface(.approvalCard(sessionId: sessionId), reason: .notification)
             SoundManager.shared.handleEvent("PermissionRequest")
         }
         refreshDerivedState()
@@ -221,9 +227,7 @@ extension AppState {
 
         if questionQueue.count == 1 {
             activeSessionId = sessionId
-            withAnimation(NotchAnimation.open) {
-                surface = .questionCard(sessionId: sessionId)
-            }
+            presentSurface(.questionCard(sessionId: sessionId), reason: .notification, animation: NotchAnimation.open)
             SoundManager.shared.handleEvent("PermissionRequest")
         }
         refreshDerivedState()
@@ -247,9 +251,7 @@ extension AppState {
 
         if questionQueue.count == 1 {
             activeSessionId = sessionId
-            withAnimation(NotchAnimation.open) {
-                surface = .questionCard(sessionId: sessionId)
-            }
+            presentSurface(.questionCard(sessionId: sessionId), reason: .notification, animation: NotchAnimation.open)
             SoundManager.shared.handleEvent("PermissionRequest")
         }
         refreshDerivedState()
@@ -419,7 +421,7 @@ extension AppState {
         if let activeSessionId = nextState.activeSessionId {
             self.activeSessionId = activeSessionId
         }
-        surface = nextState.surface
+        presentSurface(nextState.surface, reason: .notification)
     }
 
     func mostActiveSessionId() -> String? {

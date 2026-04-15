@@ -18,4 +18,10 @@ enum SessionJumpRouter {
             _ = jumpManager.openWorkspace(for: session, sessionId: sessionId)
         }
     }
+
+    @MainActor
+    @discardableResult
+    static func resume(to session: SessionSnapshot, sessionId: String) -> Bool {
+        WorkspaceJumpManager().openResumeSession(for: session, sessionId: sessionId)
+    }
 }

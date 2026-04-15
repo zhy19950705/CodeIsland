@@ -64,17 +64,8 @@ struct MenuBarPopoverView: View {
 
                 Spacer()
 
-                Button {
-                    SettingsWindowController.shared.show()
-                } label: {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.75))
-                        .frame(width: 26, height: 26)
-                        .background(Color.white.opacity(0.06))
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                }
-                .buttonStyle(.plain)
+                // Reuse the full notch control cluster in the menu bar so sound, settings, and quit stay visually aligned.
+                NotchControlButtonGroup(showsSoundToggle: true, trailingAction: .quitApp)
             }
 
             HStack(alignment: .center, spacing: 8) {
@@ -110,14 +101,21 @@ struct MenuBarPopoverView: View {
         switch visibleSurface {
         case .approvalCard:
             if let pendingPermission = appState.pendingPermission {
+                let sessionId = pendingPermission.event.sessionId ?? appState.activeSessionId
                 ApprovalBar(
                     tool: pendingPermission.event.toolName ?? "Unknown",
                     toolInput: pendingPermission.event.toolInput,
+                    session: sessionId.flatMap { appState.sessions[$0] },
                     queuePosition: 1,
                     queueTotal: appState.permissionQueue.count,
                     onAllow: { appState.approvePermission(always: false) },
                     onAlwaysAllow: { appState.approvePermission(always: true) },
-                    onDeny: { appState.denyPermission() }
+                    onDeny: { appState.denyPermission() },
+                    onJump: {
+                        if let sessionId {
+                            appState.jumpToSession(sessionId)
+                        }
+                    }
                 )
                 .padding(.top, 12)
             } else {
@@ -132,10 +130,12 @@ struct MenuBarPopoverView: View {
                     descriptions: pendingQuestion.question.descriptions,
                     sessionSource: appState.sessions[sessionId]?.source,
                     sessionContext: appState.sessions[sessionId]?.cwd,
+                    session: appState.sessions[sessionId],
                     queuePosition: 1,
                     queueTotal: appState.questionQueue.count,
                     onAnswer: { appState.answerQuestion($0) },
-                    onSkip: { appState.skipQuestion() }
+                    onSkip: { appState.skipQuestion() },
+                    onJump: { appState.jumpToSession(sessionId) }
                 )
                 .padding(.top, 12)
             } else {

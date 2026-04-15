@@ -124,7 +124,8 @@ extension AppState {
 
     private func doShowCompletion(_ sessionId: String) {
         activeSessionId = sessionId
-        surface = .completionCard(sessionId: sessionId)
+        // Completion notifications are transient and should carry their own open reason.
+        presentSurface(.completionCard(sessionId: sessionId), reason: .notification)
         let displaySeconds = SettingsManager.shared.completionCardDisplaySeconds
 
         autoCollapseTask?.cancel()
@@ -150,9 +151,7 @@ extension AppState {
                 return
             }
         }
-        withAnimation(NotchAnimation.close) {
-            surface = .collapsed
-        }
+        collapseIsland(reason: .notification)
     }
 
     var currentTool: String? {
@@ -217,9 +216,7 @@ extension AppState {
         acknowledgePendingCompletionReview(for: sessionId)
         activeSessionId = sessionId
         if case .collapsed = surface {
-            withAnimation(NotchAnimation.open) {
-                surface = .sessionList
-            }
+            openSessionList(reason: .click)
         }
         scheduleTerminalIndexPersist(sessionId: sessionId)
         scheduleSave()
@@ -253,9 +250,7 @@ extension AppState {
         guard sessions[sessionId] != nil else { return false }
         acknowledgePendingCompletionReview(for: sessionId)
         activeSessionId = sessionId
-        withAnimation(NotchAnimation.open) {
-            surface = .sessionList
-        }
+        openSessionList(reason: .click)
         startRotationIfNeeded()
         refreshDerivedState()
         return true
@@ -264,7 +259,39 @@ extension AppState {
     func jumpToSession(_ sessionId: String) {
         guard let session = sessions[sessionId] else { return }
         acknowledgePendingCompletionReview(for: sessionId)
-        SessionJumpRouter.jump(to: session, sessionId: sessionId)
+        // Auto-resume is only an optimization; if it fails we must keep the original jump fallback path.
+        if shouldAutoResumeOnJump(for: session, sessionId: sessionId),
+           SessionJumpRouter.resume(to: session, sessionId: sessionId) {
+            return
+        }
+        guard shouldValidateCodexJump(for: session) else {
+            SessionJumpRouter.jump(to: session, sessionId: sessionId)
+            return
+        }
+
+        // Codex rows can outlive the backing thread, so validate once before deep-linking into the app.
+        Task { [weak self] in
+            do {
+                let threadId = session.providerSessionId ?? sessionId
+                _ = try await CodexAppServerClient.shared.readThread(threadId: threadId)
+                await MainActor.run {
+                    guard let self, let latestSession = self.sessions[sessionId] else { return }
+                    SessionJumpRouter.jump(to: latestSession, sessionId: sessionId)
+                }
+            } catch {
+                await MainActor.run {
+                    guard let self, let latestSession = self.sessions[sessionId] else { return }
+
+                    if SessionResumeSupport.isMissingCodexThreadError(error),
+                       SessionJumpRouter.resume(to: latestSession, sessionId: sessionId) {
+                        return
+                    }
+
+                    // Transport failures should not block the original jump path, otherwise a healthy thread becomes unreachable.
+                    SessionJumpRouter.jump(to: latestSession, sessionId: sessionId)
+                }
+            }
+        }
     }
 
     func needsCompletionReview(sessionId: String) -> Bool {
@@ -273,19 +300,7 @@ extension AppState {
 
     @discardableResult
     func focusSession(cwd: String?, source: String?) -> String? {
-        let normalizedCwd = nonEmpty(cwd)
-        let normalizedSource = nonEmpty(source)?.lowercased()
-
-        let match = sessions
-            .filter { _, session in
-                let cwdMatches = normalizedCwd == nil || session.cwd == normalizedCwd
-                let sourceMatches = normalizedSource == nil || session.source == normalizedSource
-                return cwdMatches && sourceMatches
-            }
-            .max { lhs, rhs in
-                lhs.value.lastActivity < rhs.value.lastActivity
-            }?.key
-
+        let match = matchingSessionId(cwd: cwd, source: source)
         guard let match, focusSession(sessionId: match) else { return nil }
         return match
     }
@@ -496,9 +511,7 @@ extension AppState {
         }
 
         if surface == .collapsed && !sessions.isEmpty {
-            withAnimation(NotchAnimation.open) {
-                surface = .sessionList
-            }
+            openSessionList(reason: .boot)
         }
 
         refreshDerivedState()
@@ -522,8 +535,10 @@ extension AppState {
         }
 
         if let sessionId = surface.sessionId, sessionId.hasPrefix(Self.testingSessionPrefix) {
-            withAnimation(NotchAnimation.close) {
-                surface = sessions.isEmpty ? .collapsed : .sessionList
+            if sessions.isEmpty {
+                collapseIsland(reason: .unknown)
+            } else {
+                openSessionList(reason: .unknown)
             }
         }
 
@@ -549,7 +564,7 @@ extension AppState {
         pendingCompletionReviewSessionIds.removeAll()
         activeSessionId = nil
         rotatingSessionId = nil
-        surface = .collapsed
+        collapseIsland(reason: .unknown)
         codexRefreshService.clearLatestTurnIds()
 
         SessionPersistence.clear()

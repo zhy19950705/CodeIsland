@@ -7,12 +7,6 @@ struct ScreenDetector {
         let isMain: Bool
     }
 
-    /// Simulated notch width for non-notch screens — scales with screen width
-    private static func fakeNotchWidth(for screen: NSScreen) -> CGFloat {
-        let screenW = screen.frame.width
-        return min(max(screenW * 0.14, 160), 240)
-    }
-
     static func resolvedNotchWidth(
         screenWidth: CGFloat,
         auxiliaryLeftWidth: CGFloat?,
@@ -98,31 +92,24 @@ struct ScreenDetector {
         screenHasNotch(preferredScreen)
     }
 
-    /// Check if a specific screen has a notch
+    /// Honor the user's virtual-notch preference before exposing hardware metrics.
     static func screenHasNotch(_ screen: NSScreen) -> Bool {
-        if #available(macOS 12.0, *) {
-            return screen.auxiliaryTopLeftArea != nil || screen.auxiliaryTopRightArea != nil
-        }
-        return false
+        NotchHardwareDetector.hasHardwareNotch(
+            on: screen,
+            mode: currentHardwareNotchMode()
+        )
     }
 
     /// Height of the notch/menu bar area for a specific screen
     static func topBarHeight(for screen: NSScreen) -> CGFloat {
-        if #available(macOS 12.0, *) {
-            let real = screen.safeAreaInsets.top
-            if real > 0 { return real }
+        if currentHardwareNotchMode() == .forceVirtual {
+            let customizedHeight = geometrySnapshot(for: screen).notchHeight
+            return NotchHardwareDetector.clampedHeight(customizedHeight)
         }
-        // Menu bar height — only present on the screen that has it
-        let menuBarHeight = screen.frame.maxY - screen.visibleFrame.maxY
-        // On the primary screen, this is ~25pt (non-notch) or ~37pt (notch)
-        // On secondary screens without menu bar, this is 0
-        if menuBarHeight > 5 { return menuBarHeight }
-        // Fallback: use main screen's menu bar height, or default 25
-        if let main = NSScreen.main {
-            let mainMenuBar = main.frame.maxY - main.visibleFrame.maxY
-            if mainMenuBar > 5 { return mainMenuBar }
-        }
-        return 25
+        return NotchHardwareDetector.resolvedTopBarHeight(
+            on: screen,
+            mode: currentHardwareNotchMode()
+        )
     }
 
     /// Height of the notch area — returns menu bar height on non-notch screens
@@ -137,11 +124,11 @@ struct ScreenDetector {
 
     /// Width of the notch for a specific screen
     static func notchWidth(for screen: NSScreen) -> CGFloat {
-        if let override = notchWidthOverride() {
-            return override
-        }
-
-        return automaticNotchWidth(for: screen)
+        NotchHardwareDetector.resolvedNotchWidth(
+            on: screen,
+            mode: currentHardwareNotchMode(),
+            override: customizedNotchWidth(for: screen) ?? notchWidthOverride()
+        )
     }
 
     private static func automaticNotchWidth(for screen: NSScreen) -> CGFloat {
@@ -155,13 +142,35 @@ struct ScreenDetector {
                 override: nil
             )
         }
-        return fakeNotchWidth(for: screen)
+        return NotchHardwareDetector.fallbackVirtualWidth(for: screen.frame.width)
     }
 
     private static func notchWidthOverride() -> CGFloat? {
         let value = UserDefaults.standard.integer(forKey: SettingsKey.notchWidthOverride)
         guard value > 0 else { return nil }
         return CGFloat(value)
+    }
+
+    private static func customizedNotchWidth(for screen: NSScreen) -> CGFloat? {
+        let width = geometrySnapshot(for: screen).customWidth
+        guard width > 0 else { return nil }
+        return width
+    }
+
+    private static func geometrySnapshot(for screen: NSScreen) -> ScreenNotchGeometry {
+        let customization = NotchCustomizationStore.load() ?? .default
+        return customization.geometry(for: screen.notchScreenID)
+    }
+
+    private static func currentHardwareNotchMode() -> HardwareNotchMode {
+        if let customization = NotchCustomizationStore.load() {
+            return customization.hardwareNotchMode
+        }
+        guard let rawValue = UserDefaults.standard.string(forKey: SettingsKey.hardwareNotchMode),
+              let mode = HardwareNotchMode(rawValue: rawValue) else {
+            return .auto
+        }
+        return mode
     }
 
     static func signature(for screen: NSScreen) -> String {

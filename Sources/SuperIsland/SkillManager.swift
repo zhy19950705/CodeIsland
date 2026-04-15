@@ -2,8 +2,10 @@ import AppKit
 import Foundation
 
 // SkillManager is the non-UI service root for skill discovery, install, and file operations.
-final class SkillManager {
+// The service keeps immutable collaborators, so background read-only discovery can safely reuse the same instance.
+final class SkillManager: @unchecked Sendable {
     static let sourceMetadataFileName = ".superisland-skill-source.json"
+    // Mayidata currently exposes the skill hub over HTTP, so Info.plist keeps a host-scoped ATS exception for this URL.
     static let mayidataSkillHubURL = URL(string: "http://skillshub.mayidata.com")!
     let fileManager: FileManager
     let workspace: NSWorkspace

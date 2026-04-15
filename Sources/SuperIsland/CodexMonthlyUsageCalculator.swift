@@ -63,12 +63,9 @@ enum CodexMonthlyUsageCalculator {
         "gpt-5.3-codex": "gpt-5.2-codex",
     ]
     private static let fallbackModel = "gpt-5"
-    private static let fractionalTimestampFormatter: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }()
-    private static let plainTimestampFormatter = ISO8601DateFormatter()
+    private static var isRunningUnderTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    }
 
     static func loadCurrentMonth(
         now: Date = Date(),
@@ -319,6 +316,7 @@ enum CodexMonthlyUsageCalculator {
         startDate: Date,
         endDateExclusive: Date
     ) -> [CodexTokenUsageEvent]? {
+        guard !isRunningUnderTests else { return nil }
         let existingDirectories = directories.filter { FileManager.default.fileExists(atPath: $0.path) }
         guard !existingDirectories.isEmpty else { return [] }
 
@@ -524,7 +522,14 @@ enum CodexMonthlyUsageCalculator {
     }
 
     private static func parseTimestamp(_ value: String) -> Date? {
-        fractionalTimestampFormatter.date(from: value) ?? plainTimestampFormatter.date(from: value)
+        let fractionalFormatter = ISO8601DateFormatter()
+        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractionalFormatter.date(from: value) {
+            return date
+        }
+
+        let plainFormatter = ISO8601DateFormatter()
+        return plainFormatter.date(from: value)
     }
 
     private static func intValue(_ value: Any?) -> Int {

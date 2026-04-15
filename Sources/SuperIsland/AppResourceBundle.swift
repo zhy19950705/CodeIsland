@@ -2,6 +2,11 @@ import Foundation
 
 enum AppResourceBundle {
     static let bundle: Bundle = {
+        let moduleBundle = Bundle.module
+        if moduleBundle.resourceURL != nil {
+            return moduleBundle
+        }
+
         let candidateNames = [
             "SuperIsland_SuperIsland.bundle",
             "SuperIsland_SuperIsland.bundle",

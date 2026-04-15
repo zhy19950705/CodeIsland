@@ -3,6 +3,109 @@ import XCTest
 @testable import SuperIsland
 
 final class PanelWindowControllerTests: XCTestCase {
+    func testPanelGeometryCentersFrameWhenHorizontalDragDisabled() {
+        let frame = PanelGeometry.panelFrame(
+            panelSize: NSSize(width: 420, height: 180),
+            screenFrame: CGRect(x: 100, y: 50, width: 1440, height: 900),
+            allowHorizontalDrag: false,
+            storedHorizontalOffset: 120
+        )
+
+        XCTAssertEqual(frame.origin.x, 610, accuracy: 0.001)
+        XCTAssertEqual(frame.origin.y, 770, accuracy: 0.001)
+    }
+
+    func testPanelGeometryClampsDraggedPanelInsideScreenBounds() {
+        let origin = PanelGeometry.draggedFrameOrigin(
+            startPanelX: 300,
+            mouseDeltaX: 2000,
+            panelSize: NSSize(width: 420, height: 180),
+            screenFrame: CGRect(x: 100, y: 50, width: 1440, height: 900)
+        )
+
+        XCTAssertEqual(origin.x, 1120, accuracy: 0.001)
+        XCTAssertEqual(origin.y, 770, accuracy: 0.001)
+    }
+
+    func testPanelGeometryPersistsOffsetRelativeToCenteredPosition() {
+        let offset = PanelGeometry.persistedHorizontalOffset(
+            panelOriginX: 700,
+            panelWidth: 420,
+            screenFrame: CGRect(x: 100, y: 50, width: 1440, height: 900)
+        )
+
+        XCTAssertEqual(offset, 90, accuracy: 0.001)
+    }
+
+    func testPanelGeometryDragThresholdRequiresIntentionalMovement() {
+        XCTAssertFalse(PanelGeometry.shouldStartDrag(deltaX: 5))
+        XCTAssertTrue(PanelGeometry.shouldStartDrag(deltaX: 5.1))
+        XCTAssertTrue(PanelGeometry.shouldStartDrag(deltaX: -8))
+    }
+
+    func testPanelEnvironmentMonitorRefreshesWhenSelectionPreferenceChanges() {
+        XCTAssertTrue(
+            PanelEnvironmentMonitor.needsScreenRefresh(
+                previousPreferenceSignature: "automatic",
+                newPreferenceSignature: "specificScreen|1|Studio Display",
+                previousNotchWidthOverride: 0,
+                newNotchWidthOverride: 0
+            )
+        )
+    }
+
+    func testPanelEnvironmentMonitorRefreshesWhenNotchOverrideChanges() {
+        XCTAssertTrue(
+            PanelEnvironmentMonitor.needsScreenRefresh(
+                previousPreferenceSignature: "automatic",
+                newPreferenceSignature: "automatic",
+                previousNotchWidthOverride: 0,
+                newNotchWidthOverride: 188
+            )
+        )
+    }
+
+    func testPanelEnvironmentMonitorSkipsRefreshWhenSelectionInputsMatch() {
+        XCTAssertFalse(
+            PanelEnvironmentMonitor.needsScreenRefresh(
+                previousPreferenceSignature: "automatic",
+                newPreferenceSignature: "automatic",
+                previousNotchWidthOverride: 0,
+                newNotchWidthOverride: 0
+            )
+        )
+    }
+
+    func testPanelSpaceTransitionEntersFullscreenImmediately() {
+        XCTAssertEqual(
+            PanelEnvironmentMonitor.spaceTransition(
+                isFullscreen: true,
+                fullscreenLatch: false
+            ),
+            .enterFullscreen
+        )
+    }
+
+    func testPanelSpaceTransitionWaitsForExitWhenLatched() {
+        XCTAssertEqual(
+            PanelEnvironmentMonitor.spaceTransition(
+                isFullscreen: false,
+                fullscreenLatch: true
+            ),
+            .waitForFullscreenExit
+        )
+    }
+
+    func testPanelSpaceTransitionUpdatesVisibilityWhenNotFullscreenAndNotLatched() {
+        XCTAssertEqual(
+            PanelEnvironmentMonitor.spaceTransition(
+                isFullscreen: false,
+                fullscreenLatch: false
+            ),
+            .updateVisible
+        )
+    }
+
     func testResolvedPresentationModeUsesMenuBarForExplicitMenuBarOnSingleScreen() {
         XCTAssertEqual(
             PanelWindowController.resolvedPresentationMode(
@@ -22,6 +125,20 @@ final class PanelWindowControllerTests: XCTestCase {
                 screenCount: 1
             ),
             .menuBar
+        )
+    }
+
+    func testAutomaticPresentationActivationModeStaysPassiveWhenAppIsBackgrounded() {
+        // Background completion cards must not reactivate the app.
+        XCTAssertFalse(
+            PanelWindowController.automaticPresentationActivationMode(appIsActive: false)
+        )
+    }
+
+    func testAutomaticPresentationActivationModeStaysInteractiveWhenAppIsForeground() {
+        // Foreground refreshes can keep the panel interactive for normal use.
+        XCTAssertTrue(
+            PanelWindowController.automaticPresentationActivationMode(appIsActive: true)
         )
     }
 
@@ -51,5 +168,25 @@ final class PanelWindowControllerTests: XCTestCase {
         XCTAssertEqual(frames.incoming.origin.x, newFrame.origin.x)
         XCTAssertEqual(frames.incoming.origin.y, newFrame.origin.y + 30)
         XCTAssertEqual(frames.incoming.size, newFrame.size)
+    }
+
+    func testReplaceMonitorRemovesExistingMonitorBeforeAssigningNewOne() {
+        final class MonitorBox {}
+
+        let oldMonitor = MonitorBox()
+        let newMonitor = MonitorBox()
+        var currentMonitor: Any? = oldMonitor
+        var removedMonitors: [ObjectIdentifier] = []
+
+        PanelWindowController.replaceMonitor(
+            currentMonitor: &currentMonitor,
+            newMonitor: newMonitor,
+            removeMonitor: { monitor in
+                removedMonitors.append(ObjectIdentifier(monitor as AnyObject))
+            }
+        )
+
+        XCTAssertEqual(removedMonitors, [ObjectIdentifier(oldMonitor)])
+        XCTAssertTrue((currentMonitor as AnyObject?) === newMonitor)
     }
 }

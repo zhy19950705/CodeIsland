@@ -3,7 +3,7 @@ import ServiceManagement
 
 enum AppVersion {
     /// Update this each release. Used as fallback when Info.plist is unavailable (debug builds).
-    static let fallback = "0.0.11"
+    static let fallback = "1.0.15"
 
     static var current: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? fallback
@@ -79,6 +79,8 @@ enum SettingsKey {
 
     // Tool status display
     static let showToolStatus = "showToolStatus"              // true = detailed, false = simple
+    static let hookAutoApproveTools = "hookAutoApproveTools"
+    static let displayModeCompatibilityMigration = "displayModeCompatibilityMigration"
 
 }
 
@@ -120,57 +122,62 @@ struct SettingsDefaults {
     static let maxToolHistory = 20
 
     static let mascotSpeed = 100  // percentage: 0–300, 0 = silent
+    static let mascotOverridesVersion = 0
 
     static let sessionGroupingMode = "project"
 
     static let showToolStatus = true
+
+    static let registeredValues: [String: Any] = [
+        SettingsKey.displayChoice: displayChoice,
+        SettingsKey.displayMode: displayMode,
+        SettingsKey.menuBarShowDetail: menuBarShowDetail,
+        SettingsKey.screenSelectionMode: screenSelectionMode,
+        SettingsKey.allowHorizontalDrag: allowHorizontalDrag,
+        SettingsKey.panelHorizontalOffset: panelHorizontalOffset,
+        SettingsKey.hideInFullscreen: hideInFullscreen,
+        SettingsKey.hideWhenNoSession: hideWhenNoSession,
+        SettingsKey.smartSuppress: smartSuppress,
+        SettingsKey.collapseOnMouseLeave: collapseOnMouseLeave,
+        SettingsKey.hoverActivationDelay: hoverActivationDelay,
+        SettingsKey.fullscreenHoverActivationDelay: fullscreenHoverActivationDelay,
+        SettingsKey.fullscreenRevealZoneHeight: fullscreenRevealZoneHeight,
+        SettingsKey.fullscreenRevealZoneHorizontalInset: fullscreenRevealZoneHorizontalInset,
+        SettingsKey.completionCardDisplaySeconds: completionCardDisplaySeconds,
+        SettingsKey.sessionTimeout: sessionTimeout,
+        SettingsKey.maxPanelHeight: maxPanelHeight,
+        SettingsKey.notchWidthOverride: notchWidthOverride,
+        SettingsKey.maxVisibleSessions: maxVisibleSessions,
+        SettingsKey.contentFontSize: contentFontSize,
+        SettingsKey.aiMessageLines: aiMessageLines,
+        SettingsKey.showAgentDetails: showAgentDetails,
+        SettingsKey.soundEnabled: soundEnabled,
+        SettingsKey.soundVolume: soundVolume,
+        SettingsKey.soundSessionStart: soundSessionStart,
+        SettingsKey.soundTaskComplete: soundTaskComplete,
+        SettingsKey.soundTaskError: soundTaskError,
+        SettingsKey.soundApprovalNeeded: soundApprovalNeeded,
+        SettingsKey.soundPromptSubmit: soundPromptSubmit,
+        SettingsKey.soundBoot: soundBoot,
+        SettingsKey.soundPackID: soundPackID,
+        SettingsKey.maxToolHistory: maxToolHistory,
+        SettingsKey.mascotSpeed: mascotSpeed,
+        SettingsKey.mascotOverridesVersion: mascotOverridesVersion,
+        SettingsKey.sessionGroupingMode: sessionGroupingMode,
+        SettingsKey.showToolStatus: showToolStatus,
+    ]
 }
 
 @MainActor
 class SettingsManager {
     static let shared = SettingsManager()
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
 
-    private init() {
-        defaults.register(defaults: [
-            SettingsKey.displayChoice: SettingsDefaults.displayChoice,
-            SettingsKey.displayMode: SettingsDefaults.displayMode,
-            SettingsKey.menuBarShowDetail: SettingsDefaults.menuBarShowDetail,
-            SettingsKey.screenSelectionMode: SettingsDefaults.screenSelectionMode,
-            SettingsKey.allowHorizontalDrag: SettingsDefaults.allowHorizontalDrag,
-            SettingsKey.panelHorizontalOffset: SettingsDefaults.panelHorizontalOffset,
-            SettingsKey.hideInFullscreen: SettingsDefaults.hideInFullscreen,
-            SettingsKey.hideWhenNoSession: SettingsDefaults.hideWhenNoSession,
-            SettingsKey.smartSuppress: SettingsDefaults.smartSuppress,
-            SettingsKey.collapseOnMouseLeave: SettingsDefaults.collapseOnMouseLeave,
-            SettingsKey.hoverActivationDelay: SettingsDefaults.hoverActivationDelay,
-            SettingsKey.fullscreenHoverActivationDelay: SettingsDefaults.fullscreenHoverActivationDelay,
-            SettingsKey.fullscreenRevealZoneHeight: SettingsDefaults.fullscreenRevealZoneHeight,
-            SettingsKey.fullscreenRevealZoneHorizontalInset: SettingsDefaults.fullscreenRevealZoneHorizontalInset,
-            SettingsKey.completionCardDisplaySeconds: SettingsDefaults.completionCardDisplaySeconds,
-            SettingsKey.sessionTimeout: SettingsDefaults.sessionTimeout,
-            SettingsKey.maxPanelHeight: SettingsDefaults.maxPanelHeight,
-            SettingsKey.notchWidthOverride: SettingsDefaults.notchWidthOverride,
-            SettingsKey.maxVisibleSessions: SettingsDefaults.maxVisibleSessions,
-            SettingsKey.contentFontSize: SettingsDefaults.contentFontSize,
-            SettingsKey.aiMessageLines: SettingsDefaults.aiMessageLines,
-            SettingsKey.showAgentDetails: SettingsDefaults.showAgentDetails,
-            SettingsKey.soundEnabled: SettingsDefaults.soundEnabled,
-            SettingsKey.soundVolume: SettingsDefaults.soundVolume,
-            SettingsKey.soundSessionStart: SettingsDefaults.soundSessionStart,
-            SettingsKey.soundTaskComplete: SettingsDefaults.soundTaskComplete,
-            SettingsKey.soundTaskError: SettingsDefaults.soundTaskError,
-            SettingsKey.soundApprovalNeeded: SettingsDefaults.soundApprovalNeeded,
-            SettingsKey.soundPromptSubmit: SettingsDefaults.soundPromptSubmit,
-            SettingsKey.soundBoot: SettingsDefaults.soundBoot,
-            SettingsKey.soundPackID: SettingsDefaults.soundPackID,
-            SettingsKey.maxToolHistory: SettingsDefaults.maxToolHistory,
-            SettingsKey.mascotSpeed: SettingsDefaults.mascotSpeed,
-            SettingsKey.mascotOverridesVersion: 0,
-            SettingsKey.sessionGroupingMode: SettingsDefaults.sessionGroupingMode,
-            SettingsKey.showToolStatus: SettingsDefaults.showToolStatus,
-        ])
+    init(defaults: UserDefaults = .standard, hasPhysicalNotch: Bool? = nil) {
+        self.defaults = defaults
+        defaults.register(defaults: SettingsDefaults.registeredValues)
+        migrateDisplayModeCompatibilityIfNeeded(hasPhysicalNotch: hasPhysicalNotch ?? ScreenDetector.hasNotch)
     }
 
     var launchAtLogin: Bool {
@@ -219,6 +226,19 @@ class SettingsManager {
     var panelHorizontalOffset: Double {
         get { defaults.double(forKey: SettingsKey.panelHorizontalOffset) }
         set { defaults.set(newValue, forKey: SettingsKey.panelHorizontalOffset) }
+    }
+
+    private func migrateDisplayModeCompatibilityIfNeeded(hasPhysicalNotch: Bool) {
+        guard defaults.object(forKey: SettingsKey.displayModeCompatibilityMigration) == nil else { return }
+        defer { defaults.set(AppVersion.current, forKey: SettingsKey.displayModeCompatibilityMigration) }
+
+        guard !hasPhysicalNotch else { return }
+        guard defaults.string(forKey: SettingsKey.displayMode) == DisplayMode.notch.rawValue else { return }
+
+        let legacyChoice = defaults.string(forKey: SettingsKey.displayChoice)
+        guard legacyChoice == nil || legacyChoice == "auto" else { return }
+
+        defaults.set(DisplayMode.menuBar.rawValue, forKey: SettingsKey.displayMode)
     }
 
     var hideInFullscreen: Bool {

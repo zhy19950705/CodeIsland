@@ -7,6 +7,10 @@ private let log = Logger(subsystem: "com.superisland", category: "HookServer")
 
 @MainActor
 class HookServer {
+    private enum BlockingTimeout {
+        static let seconds: TimeInterval = 300
+    }
+
     private let appState: AppState
     nonisolated static var socketPath: String { SocketPath.path }
     private var listener: NWListener?
@@ -94,13 +98,6 @@ class HookServer {
         }
     }
 
-    /// Internal tools that are safe to auto-approve without user confirmation.
-    private static let autoApproveTools: Set<String> = [
-        "TaskCreate", "TaskUpdate", "TaskGet", "TaskList", "TaskOutput", "TaskStop",
-        "TodoRead", "TodoWrite",
-        "EnterPlanMode", "ExitPlanMode",
-    ]
-
     private func processRequest(data: Data, connection: NWConnection) {
         if let usageEnvelope = try? JSONDecoder().decode(UsageUpdateEnvelope.self, from: data),
            usageEnvelope.type == "usage_update" {
@@ -124,9 +121,8 @@ class HookServer {
             let sessionId = event.sessionId ?? "default"
 
             // Auto-approve safe internal tools without showing UI
-            if let toolName = event.toolName, Self.autoApproveTools.contains(toolName) {
-                let response = #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#
-                sendResponse(connection: connection, data: Data(response.utf8))
+            if HookPolicy.shared.shouldAutoApprove(toolName: event.toolName) {
+                sendResponse(connection: connection, data: HookResponsePayload.permissionAllow())
                 return
             }
 
@@ -135,7 +131,8 @@ class HookServer {
                 monitorPeerDisconnect(connection: connection, sessionId: sessionId)
                 Task {
                     let responseBody = await withCheckedContinuation { continuation in
-                        appState.handleAskUserQuestion(event, continuation: continuation)
+                        let requestId = appState.handleAskUserQuestion(event, continuation: continuation)
+                        self.scheduleQuestionTimeout(requestId: requestId, sessionId: sessionId, isFromPermission: true)
                     }
                     self.sendResponse(connection: connection, data: responseBody)
                 }
@@ -144,7 +141,8 @@ class HookServer {
             monitorPeerDisconnect(connection: connection, sessionId: sessionId)
             Task {
                 let responseBody = await withCheckedContinuation { continuation in
-                    appState.handlePermissionRequest(event, continuation: continuation)
+                    let requestId = appState.handlePermissionRequest(event, continuation: continuation)
+                    self.schedulePermissionTimeout(requestId: requestId, sessionId: sessionId)
                 }
                 self.sendResponse(connection: connection, data: responseBody)
             }
@@ -154,7 +152,9 @@ class HookServer {
             monitorPeerDisconnect(connection: connection, sessionId: questionSessionId)
             Task {
                 let responseBody = await withCheckedContinuation { continuation in
-                    appState.handleQuestion(event, continuation: continuation)
+                    if let requestId = appState.handleQuestion(event, continuation: continuation) {
+                        self.scheduleQuestionTimeout(requestId: requestId, sessionId: questionSessionId, isFromPermission: false)
+                    }
                 }
                 self.sendResponse(connection: connection, data: responseBody)
             }
@@ -184,8 +184,12 @@ class HookServer {
     /// card was even visible. We now rely on `stateUpdateHandler` transitioning to
     /// `cancelled`/`failed` — which only happens on real socket teardown, not half-close.
     private func monitorPeerDisconnect(connection: NWConnection, sessionId: String) {
+        let key = ObjectIdentifier(connection)
+        if connectionContexts[key] != nil {
+            return
+        }
         let context = ConnectionContext()
-        connectionContexts[ObjectIdentifier(connection)] = context
+        connectionContexts[key] = context
 
         connection.stateUpdateHandler = { [weak self] state in
             Task { @MainActor in
@@ -195,7 +199,7 @@ class HookServer {
                     if !context.responded {
                         self.appState.handlePeerDisconnect(sessionId: sessionId)
                     }
-                    self.connectionContexts.removeValue(forKey: ObjectIdentifier(connection))
+                    self.connectionContexts.removeValue(forKey: key)
                 default:
                     break
                 }
@@ -211,5 +215,24 @@ class HookServer {
         connection.send(content: data, completion: .contentProcessed { _ in
             connection.cancel()
         })
+    }
+
+    private func schedulePermissionTimeout(requestId: UUID, sessionId: String) {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(BlockingTimeout.seconds))
+            guard let self else { return }
+            guard self.appState.timeoutPermissionRequest(id: requestId) else { return }
+            log.warning("PermissionRequest timed out for session \(sessionId, privacy: .public)")
+        }
+    }
+
+    private func scheduleQuestionTimeout(requestId: UUID, sessionId: String, isFromPermission: Bool) {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(BlockingTimeout.seconds))
+            guard let self else { return }
+            guard self.appState.timeoutQuestionRequest(id: requestId) else { return }
+            let kind = isFromPermission ? "AskUserQuestion" : "Question"
+            log.warning("\(kind, privacy: .public) timed out for session \(sessionId, privacy: .public)")
+        }
     }
 }

@@ -66,8 +66,11 @@ final class SkillManagerTests: XCTestCase {
         let source = SkillSourceMetadata(
             repoFullName: "owner/reviewer-skills",
             repoURL: "https://github.com/owner/reviewer-skills",
+            cloneURL: "https://github.com/owner/reviewer-skills.git",
             sourcePath: ".",
-            installedAt: Date(timeIntervalSince1970: 1_700_000_000)
+            installedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            installedRevision: nil,
+            cachedRemoteRevision: nil
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -81,6 +84,7 @@ final class SkillManagerTests: XCTestCase {
         XCTAssertEqual(skill.version, "1.2.3")
         XCTAssertEqual(skill.author, "SuperIsland")
         XCTAssertEqual(skill.sourceMetadata?.repoFullName, "owner/reviewer-skills")
+        XCTAssertTrue(skill.hasUpdateSource)
         XCTAssertTrue(skill.isUpdatable)
     }
 
@@ -367,6 +371,33 @@ final class SkillManagerTests: XCTestCase {
         XCTAssertEqual(normalized.repoFullName, "guandata/skills")
         XCTAssertEqual(normalized.sourceRootPath, "go-skills")
         XCTAssertEqual(normalized.preferredSkillName, "yuque-skill")
+    }
+
+    func testParseSkillsShLeaderboardHTMLExtractsRankAndRepository() throws {
+        let html = #"<a class="group grid lg:grid-cols-[auto_1fr_auto] items-center gap-3" href="/openai/codex/reviewer"><span class="text-sm lg:text-base text-(--ds-gray-600) font-mono">7</span><h3 class="font-semibold text-foreground truncate whitespace-nowrap">Reviewer</h3><p class="text-xs lg:text-sm text-(--ds-gray-600) font-mono mt-0.5 lg:mt-0 truncate">openai/codex-skills</p><span class="font-mono text-sm text-foreground">1.2k</span></a>"#
+
+        let item = try XCTUnwrap(manager.parseSkillsShLeaderboardHTML(html).first)
+
+        XCTAssertEqual(item.source, .skillsSh)
+        XCTAssertEqual(item.title, "Reviewer")
+        XCTAssertEqual(item.repoFullName, "openai/codex-skills")
+        XCTAssertEqual(item.rank, 7)
+        XCTAssertEqual(item.installsText, "1.2k")
+        XCTAssertEqual(item.installReference, "openai/codex-skills")
+    }
+
+    func testParseMayidataListingHTMLExtractsRepoTagsAndDate() throws {
+        let html = #"<a class="skill-card" href="/skills/reviewer"><p class="skill-card__repo">guandata/reviewer</p><h3>Reviewer</h3><p>Checks risky diffs.</p><p class="skill-card__author">alice</p><p class="skill-card__updated-at">更新于 <!-- -->2026/4/1</p><span class="skill-pill">review</span><span class="skill-pill">safety</span></a>"#
+
+        let item = try XCTUnwrap(manager.parseMayidataListingHTML(html).first)
+
+        XCTAssertEqual(item.source, .mayidata)
+        XCTAssertEqual(item.title, "Reviewer")
+        XCTAssertEqual(item.repoFullName, "guandata/reviewer")
+        XCTAssertEqual(item.description, "Checks risky diffs.")
+        XCTAssertEqual(item.topics, ["review", "safety"])
+        XCTAssertEqual(item.installReference, "guandata/reviewer")
+        XCTAssertEqual(item.updatedAt, manager.parseMayidataDate("2026/4/1"))
     }
 
     func testImportSkillsToSharedLibrarySkipsProjectScopedSkillsInBatch() throws {

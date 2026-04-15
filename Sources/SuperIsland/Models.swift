@@ -1,14 +1,35 @@
 import Foundation
 import SuperIslandCore
 
+final class BlockingResponse {
+    private var continuation: CheckedContinuation<Data, Never>?
+    private let lock = NSLock()
+
+    init(_ continuation: CheckedContinuation<Data, Never>) {
+        self.continuation = continuation
+    }
+
+    func resume(returning data: Data) {
+        lock.lock()
+        guard let continuation else {
+            lock.unlock()
+            return
+        }
+        self.continuation = nil
+        lock.unlock()
+        continuation.resume(returning: data)
+    }
+}
+
 struct ApprovalPreviewPayload {
     let tool: String
     let toolInput: [String: Any]?
 }
 
 struct PermissionRequest {
+    let id = UUID()
     let event: HookEvent
-    let continuation: CheckedContinuation<Data, Never>?
+    let response: BlockingResponse?
     let approveAction: (@MainActor (_ always: Bool) -> Void)?
     let denyAction: (@MainActor () -> Void)?
 
@@ -19,7 +40,7 @@ struct PermissionRequest {
         denyAction: (@MainActor () -> Void)? = nil
     ) {
         self.event = event
-        self.continuation = continuation
+        self.response = BlockingResponse(continuation)
         self.approveAction = approveAction
         self.denyAction = denyAction
     }
@@ -30,16 +51,17 @@ struct PermissionRequest {
         denyAction: @escaping @MainActor () -> Void
     ) {
         self.event = event
-        self.continuation = nil
+        self.response = nil
         self.approveAction = approveAction
         self.denyAction = denyAction
     }
 }
 
 struct QuestionRequest {
+    let id = UUID()
     let event: HookEvent
     let question: QuestionPayload
-    let continuation: CheckedContinuation<Data, Never>?
+    let response: BlockingResponse?
     let answerAction: (@MainActor (_ answer: String) -> Void)?
     let skipAction: (@MainActor () -> Void)?
     /// true when converted from AskUserQuestion PermissionRequest
@@ -55,7 +77,7 @@ struct QuestionRequest {
     ) {
         self.event = event
         self.question = question
-        self.continuation = continuation
+        self.response = BlockingResponse(continuation)
         self.answerAction = answerAction
         self.skipAction = skipAction
         self.isFromPermission = isFromPermission
@@ -70,7 +92,7 @@ struct QuestionRequest {
     ) {
         self.event = event
         self.question = question
-        self.continuation = nil
+        self.response = nil
         self.answerAction = answerAction
         self.skipAction = skipAction
         self.isFromPermission = isFromPermission

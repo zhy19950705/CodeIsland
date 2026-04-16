@@ -3,7 +3,7 @@ import ServiceManagement
 
 enum AppVersion {
     /// Update this each release. Used as fallback when Info.plist is unavailable (debug builds).
-    static let fallback = "1.0.16"
+    static let fallback = "1.0.17"
 
     static var current: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? fallback
@@ -81,6 +81,8 @@ enum SettingsKey {
     static let showToolStatus = "showToolStatus"              // true = detailed, false = simple
     static let hookAutoApproveTools = "hookAutoApproveTools"
     static let displayModeCompatibilityMigration = "displayModeCompatibilityMigration"
+    // Marks whether the one-time first-launch guidance has already been shown.
+    static let firstLaunchExperiencePresented = "firstLaunchExperiencePresented"
 
 }
 

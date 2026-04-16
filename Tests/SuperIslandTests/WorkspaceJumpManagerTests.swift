@@ -1,9 +1,38 @@
 import XCTest
+import AppKit
 @testable import SuperIsland
 import SuperIslandCore
 
 @MainActor
 final class WorkspaceJumpManagerTests: XCTestCase {
+    // Editor presentation tests only need bundle lookup, so a tiny workspace stub keeps them deterministic.
+    private final class WorkspaceStub: NSWorkspace {
+        let applicationURLs: [String: URL]
+
+        init(applicationURLs: [String: URL]) {
+            self.applicationURLs = applicationURLs
+            super.init()
+        }
+
+        override func urlForApplication(withBundleIdentifier bundleIdentifier: String) -> URL? {
+            applicationURLs[bundleIdentifier]
+        }
+    }
+
+    // The lightweight render path only consults absolute executables, so a file-manager stub keeps those checks deterministic.
+    private final class FileManagerStub: FileManager {
+        let executablePaths: Set<String>
+
+        init(executablePaths: Set<String>) {
+            self.executablePaths = executablePaths
+            super.init()
+        }
+
+        override func isExecutableFile(atPath path: String) -> Bool {
+            executablePaths.contains(path)
+        }
+    }
+
     // Keep a compact cmux topology fixture here so jump-resolution tests stay fast and deterministic.
     private func makeCmuxWorkspaces() -> [WorkspaceJumpManager.CmuxWorkspace] {
         [
@@ -35,6 +64,16 @@ final class WorkspaceJumpManagerTests: XCTestCase {
                 ]
             ),
         ]
+    }
+
+    // Render-time editor actions only need a real directory; a temporary root keeps the resolve path environment-independent.
+    private func makeWorkspaceDirectory() throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: url)
+        }
+        return url
     }
 
     func testVSCodeHostBeatsCodexSource() {
@@ -89,6 +128,66 @@ final class WorkspaceJumpManagerTests: XCTestCase {
         let targets = WorkspaceJumpManager().fallbackTitles(for: session)
 
         XCTAssertEqual(targets, ["Finder"])
+    }
+
+    func testEditorFallbackPrefersEditorTargetsBeforeFinderForTerminalHostedSessions() {
+        var session = SessionSnapshot()
+        session.source = "cmux"
+        session.termBundleId = "com.cmuxterm.app"
+        session.tmuxPane = "pane:1"
+
+        let targets = WorkspaceJumpManager().editorFallbackChain(for: session).map(\.title)
+
+        XCTAssertEqual(targets.first, "Cursor")
+        XCTAssertEqual(targets.last, "Finder")
+        XCTAssertFalse(targets.prefix(4).contains("cmux"))
+        XCTAssertFalse(targets.prefix(4).contains("Terminal"))
+    }
+
+    func testEditorFallbackKeepsDetectedIDEHostAheadOfSourceSpecificApp() {
+        var session = SessionSnapshot()
+        session.source = "codex"
+        session.termBundleId = "com.microsoft.VSCode"
+
+        let targets = WorkspaceJumpManager().editorFallbackChain(for: session).map(\.title)
+
+        XCTAssertEqual(targets.first, "VS Code")
+        XCTAssertFalse(targets.prefix(2).contains("Terminal"))
+    }
+
+    func testPresentationEditorTargetFallsBackToFinderWhenWorkspaceExists() throws {
+        let workspaceURL = try makeWorkspaceDirectory()
+        let manager = WorkspaceJumpManager(
+            fileManager: FileManagerStub(executablePaths: []),
+            workspace: WorkspaceStub(applicationURLs: [:])
+        )
+
+        var session = SessionSnapshot()
+        session.source = "codex"
+        // Unsupported IDE hosts intentionally collapse the editor chain to Finder, which makes the
+        // render-time path deterministic even on machines that have multiple editors installed.
+        session.termBundleId = "com.apple.dt.Xcode"
+        session.cwd = workspaceURL.path
+
+        XCTAssertEqual(manager.resolvedPresentationEditorTarget(for: session), .finder)
+    }
+
+    func testPresentationEditorTargetPrefersInstalledEditorBundleBeforeFinder() throws {
+        let workspaceURL = try makeWorkspaceDirectory()
+        let manager = WorkspaceJumpManager(
+            fileManager: FileManagerStub(executablePaths: []),
+            workspace: WorkspaceStub(
+                applicationURLs: [
+                    "com.todesktop.230313mzl4w4u92": URL(fileURLWithPath: "/Applications/Cursor.app"),
+                ]
+            )
+        )
+
+        var session = SessionSnapshot()
+        session.source = "cursor"
+        session.cwd = workspaceURL.path
+
+        XCTAssertEqual(manager.resolvedPresentationEditorTarget(for: session), .cursor)
     }
 
     func testCmuxSurfaceFocusTargetPrefersExactSurfaceWithinPane() {

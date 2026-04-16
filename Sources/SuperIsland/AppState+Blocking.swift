@@ -152,7 +152,7 @@ extension AppState {
         if permissionQueue.count == 1 {
             activeSessionId = sessionId
             // Blocking cards should restore cleanly after collapse/reopen.
-            presentSurface(.approvalCard(sessionId: sessionId), reason: .notification)
+            panelCoordinator.presentBlockingCard(.approvalCard(sessionId: sessionId), reason: .notification)
             SoundManager.shared.handleEvent("PermissionRequest")
         }
         refreshDerivedState()
@@ -227,7 +227,11 @@ extension AppState {
 
         if questionQueue.count == 1 {
             activeSessionId = sessionId
-            presentSurface(.questionCard(sessionId: sessionId), reason: .notification, animation: NotchAnimation.open)
+            panelCoordinator.presentBlockingCard(
+                .questionCard(sessionId: sessionId),
+                reason: .notification,
+                animation: NotchAnimation.open
+            )
             SoundManager.shared.handleEvent("PermissionRequest")
         }
         refreshDerivedState()
@@ -251,7 +255,11 @@ extension AppState {
 
         if questionQueue.count == 1 {
             activeSessionId = sessionId
-            presentSurface(.questionCard(sessionId: sessionId), reason: .notification, animation: NotchAnimation.open)
+            panelCoordinator.presentBlockingCard(
+                .questionCard(sessionId: sessionId),
+                reason: .notification,
+                animation: NotchAnimation.open
+            )
             SoundManager.shared.handleEvent("PermissionRequest")
         }
         refreshDerivedState()
@@ -418,10 +426,8 @@ extension AppState {
             currentSurface: surface
         ) else { return }
 
-        if let activeSessionId = nextState.activeSessionId {
-            self.activeSessionId = activeSessionId
-        }
-        presentSurface(nextState.surface, reason: .notification)
+        // Blocking queue transitions are UI policy, so let the panel coordinator decide how the next surface should appear.
+        panelCoordinator.applyBlockingPresentation(nextState)
     }
 
     func mostActiveSessionId() -> String? {

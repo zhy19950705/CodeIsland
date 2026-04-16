@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import SwiftUI
 
 /// Interaction, visibility, live-edit, and fullscreen behavior for the panel window controller.
@@ -180,8 +181,14 @@ extension PanelWindowController {
     /// Closed state stays below menus; open states rise above menu-bar items for reliable clicks.
     func syncWindowInteractionBehavior() {
         guard let panel = panel as? KeyablePanel else { return }
+        let presentationStatus = appState.presentationState.status
 
-        switch appState.presentationState.status {
+        panel.ignoresMouseEvents = Self.shouldIgnoreMouseEvents(
+            for: presentationStatus,
+            supportsBackgroundPointerTracking: Self.supportsBackgroundPointerTracking()
+        )
+
+        switch presentationStatus {
         case .closed:
             panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.mainMenuWindow)) + 1)
             panel.allowsInteractiveActivation = false
@@ -191,10 +198,32 @@ extension PanelWindowController {
         }
     }
 
+    /// Closed panels should be visually present but pointer-transparent so menu-bar
+    /// interactions keep working until the hover controller deliberately opens them.
+    nonisolated static func shouldIgnoreMouseEvents(
+        for status: IslandPresentationStatus,
+        supportsBackgroundPointerTracking: Bool
+    ) -> Bool {
+        switch status {
+        case .closed:
+            // Closed mode should stay click-through when global pointer tracking
+            // is available, matching the notch-overlay behavior in the reference apps.
+            return supportsBackgroundPointerTracking
+        case .opened, .popping:
+            return false
+        }
+    }
+
+    /// Background pointer tracking depends on Accessibility trust because closed-state
+    /// reopening is driven by global mouse monitors rather than SwiftUI hover.
+    nonisolated static func supportsBackgroundPointerTracking() -> Bool {
+        AXIsProcessTrusted()
+    }
+
     /// Only explicit direct interactions should focus the panel while background notifications stay passive.
     func shouldActivateWindow(for reason: IslandOpenReason) -> Bool {
         switch reason {
-        case .click, .shortcut, .deeplink:
+        case .click, .pinned, .shortcut, .deeplink:
             return true
         case .hover, .notification, .boot, .unknown:
             return NSApp.isActive
@@ -297,37 +326,6 @@ extension PanelWindowController {
         return TerminalVisibilityDetector.isTerminalFrontmostForSession(session)
     }
 
-    /// Ignore hover only inside the physical notch cutout, not across the entire collapsed panel.
-    func isMouseInsideCollapsedNotchDeadZone(
-        panelWidth: CGFloat,
-        notchWidth: CGFloat,
-        notchHeight: CGFloat,
-        hasNotch: Bool,
-        ignoresHover: Bool
-    ) -> Bool {
-        guard let panel,
-              hasNotch,
-              ignoresHover,
-              notchWidth > 0,
-              notchHeight > 0,
-              panelWidth > notchWidth else { return false }
-
-        let frame = panel.frame
-        let notchRect = NSRect(
-            x: frame.minX + (panelWidth - notchWidth) / 2,
-            y: frame.maxY - notchHeight,
-            width: notchWidth,
-            height: notchHeight
-        )
-        return notchRect.contains(NSEvent.mouseLocation)
-    }
-
-    /// Some global clicks can leak on external displays, so panel-frame checks are still needed.
-    func isMouseInsidePanelFrame() -> Bool {
-        guard let panel else { return false }
-        return panel.frame.contains(NSEvent.mouseLocation)
-    }
-
     func windowDidMove(_ notification: Notification) {
         // Drag is handled by setupHorizontalDragMonitor — no correction needed here.
     }
@@ -335,4 +333,5 @@ extension PanelWindowController {
 
 extension Notification.Name {
     static let superIslandPanelStateDidChange = Notification.Name("SuperIslandPanelStateDidChange")
+    static let superIslandSurfaceDidChange = Notification.Name("SuperIslandSurfaceDidChange")
 }

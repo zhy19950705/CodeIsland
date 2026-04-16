@@ -174,3 +174,4 @@ echo
 echo "安装完成"
 echo "应用位置: $TARGET_APP_PATH"
 echo "可直接运行: open \"$TARGET_APP_PATH\""
+echo "首次启动如果没有看到界面，可运行: open \"superisland://settings\""

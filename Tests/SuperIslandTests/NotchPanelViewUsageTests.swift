@@ -23,24 +23,6 @@ final class NotchPanelViewUsageTests: XCTestCase {
         )
     }
 
-    func testCompactUsageProviderFollowsClaudeSessionSource() {
-        var claudeSession = SessionSnapshot()
-        claudeSession.source = "claude"
-
-        let provider = NotchPanelView.compactUsageProvider(
-            from: UsageSnapshot(providers: [
-                makeProvider(source: .claude, percentage: 34),
-                makeProvider(source: .codex, percentage: 66),
-            ]),
-            sessions: ["claude-session": claudeSession],
-            rotatingSessionId: nil,
-            activeSessionId: "claude-session",
-            primarySource: "codex"
-        )
-
-        XCTAssertEqual(provider?.source, .claude)
-    }
-
     func testPrimaryRemainingPercentageNormalizesClaudeAndCodex() {
         let claude = makeProvider(source: .claude, percentage: 34)
         XCTAssertEqual(claude.primaryUsedPercentage, 34)
@@ -53,41 +35,6 @@ final class NotchPanelViewUsageTests: XCTestCase {
         let codex = makeProvider(source: .codex, percentage: 66)
         XCTAssertEqual(codex.primaryUsedPercentage, 34)
         XCTAssertEqual(codex.primaryRemainingPercentage, 66)
-    }
-
-    func testCompactUsageProviderFollowsCursorSessionSource() {
-        var cursorSession = SessionSnapshot()
-        cursorSession.source = "cursor"
-
-        let provider = NotchPanelView.compactUsageProvider(
-            from: UsageSnapshot(providers: [
-                makeProvider(source: .cursor, percentage: 21),
-                makeProvider(source: .codex, percentage: 66),
-            ]),
-            sessions: ["cursor-session": cursorSession],
-            rotatingSessionId: nil,
-            activeSessionId: "cursor-session",
-            primarySource: "codex"
-        )
-
-        XCTAssertEqual(provider?.source, .cursor)
-    }
-
-    func testCompactUsageProviderSkipsTokenOnlyClaudeSnapshot() {
-        var claudeSession = SessionSnapshot()
-        claudeSession.source = "claude"
-
-        let provider = NotchPanelView.compactUsageProvider(
-            from: UsageSnapshot(providers: [
-                makeProvider(source: .claude, percentage: 0, showsQuotaBadge: false),
-            ]),
-            sessions: ["claude-session": claudeSession],
-            rotatingSessionId: nil,
-            activeSessionId: "claude-session",
-            primarySource: "claude"
-        )
-
-        XCTAssertNil(provider)
     }
 
     func testClaudePrimaryUsagePreservesFiveHourWindowWhenZeroUsed() {
@@ -114,6 +61,37 @@ final class NotchPanelViewUsageTests: XCTestCase {
 
         XCTAssertEqual(provider.usedPercentage(for: provider.primary), 0)
         XCTAssertEqual(provider.remainingPercentage(for: provider.primary), 100)
+    }
+
+    func testCollapsedPanelWidthKeepsCompactNotchModeWideEnoughForStatusAndCounters() {
+        let width = NotchPanelView.collapsedPanelWidth(
+            notchWidth: 184,
+            compactWingWidth: 41,
+            screenWidth: 1512,
+            hasNotch: true,
+            displayedToolStatus: true,
+            activityExtraWidth: 0
+        )
+
+        XCTAssertEqual(width, 460, accuracy: 0.001)
+    }
+
+    func testCollapsedPanelWidthHonorsMaximumWidthClamp() {
+        let width = NotchPanelView.collapsedPanelWidth(
+            notchWidth: 260,
+            compactWingWidth: 41,
+            screenWidth: 430,
+            hasNotch: true,
+            displayedToolStatus: true,
+            activityExtraWidth: 120
+        )
+
+        XCTAssertEqual(width, 390, accuracy: 0.001)
+    }
+
+    func testSessionListNotchScrollHeightKeepsMinimumViewportForTwoRows() {
+        XCTAssertEqual(SessionListView.notchScrollHeight(maxVisibleSessions: 0), 180, accuracy: 0.001)
+        XCTAssertEqual(SessionListView.notchScrollHeight(maxVisibleSessions: 5), 450, accuracy: 0.001)
     }
 
     private func makeProvider(

@@ -41,6 +41,8 @@ struct UsageWindowStat: Codable, Hashable, Sendable {
     var label: String
     var percentage: Int
     var detail: String
+    // Keep reset timestamps optional so cached snapshots from older builds still decode cleanly.
+    var refreshAtUnix: TimeInterval? = nil
     var tintHex: String
 }
 

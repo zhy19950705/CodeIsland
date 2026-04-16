@@ -128,6 +128,70 @@ final class PanelWindowControllerTests: XCTestCase {
         )
     }
 
+    func testExpandedPanelHeightUsesDynamicSessionDetailEstimate() {
+        let height = PanelWindowController.expandedPanelHeight(
+            surface: .sessionDetail(sessionId: "done"),
+            collapsedHeight: 46,
+            maxPanelHeight: 560,
+            screenHeight: 900,
+            maxVisibleSessions: 5,
+            detailEstimatedHeight: 480
+        )
+
+        XCTAssertEqual(height, 480, accuracy: 0.001)
+    }
+
+    func testExpandedPanelHeightTreatsCompletionCardLikeDetailSurface() {
+        let height = PanelWindowController.expandedPanelHeight(
+            surface: .completionCard(sessionId: "done"),
+            collapsedHeight: 46,
+            maxPanelHeight: 560,
+            screenHeight: 900,
+            maxVisibleSessions: 5,
+            detailEstimatedHeight: 430
+        )
+
+        XCTAssertEqual(height, 430, accuracy: 0.001)
+    }
+
+    func testExpandedPanelHeightStillUsesConfiguredMaximumAsClamp() {
+        let height = PanelWindowController.expandedPanelHeight(
+            surface: .sessionDetail(sessionId: "done"),
+            collapsedHeight: 46,
+            maxPanelHeight: 420,
+            screenHeight: 900,
+            maxVisibleSessions: 5,
+            detailEstimatedHeight: 480
+        )
+
+        XCTAssertEqual(height, 420, accuracy: 0.001)
+    }
+
+    func testExpandedPanelHeightCapsSessionDetailAtConfiguredScreenRatio() {
+        let height = PanelWindowController.expandedPanelHeight(
+            surface: .sessionDetail(sessionId: "done"),
+            collapsedHeight: 46,
+            maxPanelHeight: 560,
+            screenHeight: 600,
+            maxVisibleSessions: 5,
+            detailEstimatedHeight: 480
+        )
+
+        XCTAssertEqual(height, 384, accuracy: 0.001)
+    }
+
+    func testExpandedPanelHeightLeavesExtraBreathingRoomForSessionList() {
+        let height = PanelWindowController.expandedPanelHeight(
+            surface: .sessionList,
+            collapsedHeight: 46,
+            maxPanelHeight: 600,
+            screenHeight: 900,
+            maxVisibleSessions: 5
+        )
+
+        XCTAssertEqual(height, 526, accuracy: 0.001)
+    }
+
     func testAutomaticPresentationActivationModeStaysPassiveWhenAppIsBackgrounded() {
         // Background completion cards must not reactivate the app.
         XCTAssertFalse(
@@ -139,6 +203,14 @@ final class PanelWindowControllerTests: XCTestCase {
         // Foreground refreshes can keep the panel interactive for normal use.
         XCTAssertTrue(
             PanelWindowController.automaticPresentationActivationMode(appIsActive: true)
+        )
+    }
+
+    func testDirectPanelClickOnlyPromotesPanelWindow() {
+        // Panel clicks should not raise unrelated windows like Settings.
+        XCTAssertEqual(
+            KeyablePanel.directClickActivationPolicy(),
+            .panelOnly
         )
     }
 

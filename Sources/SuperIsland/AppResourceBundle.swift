@@ -2,6 +2,7 @@ import Foundation
 
 enum AppResourceBundle {
     static let bundle: Bundle = {
+        // SwiftPM tests expose copied resources through Bundle.module, so prefer it before manual lookup.
         let moduleBundle = Bundle.module
         if moduleBundle.resourceURL != nil {
             return moduleBundle
@@ -16,6 +17,7 @@ enum AppResourceBundle {
             Bundle.main.resourceURL,
             Bundle.main.bundleURL,
             Bundle.main.bundleURL.deletingLastPathComponent(),
+            Bundle.main.executableURL?.deletingLastPathComponent(),
         ].compactMap { $0 }
 
         for root in candidateRoots {
@@ -27,6 +29,7 @@ enum AppResourceBundle {
             }
         }
 
-        Swift.fatalError("could not locate the app resource bundle")
+        let searchedRoots = candidateRoots.map { $0.path }.joined(separator: ", ")
+        Swift.fatalError("could not locate the app resource bundle under: \(searchedRoots)")
     }()
 }

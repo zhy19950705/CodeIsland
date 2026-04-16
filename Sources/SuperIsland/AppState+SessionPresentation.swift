@@ -125,13 +125,14 @@ extension AppState {
     private func doShowCompletion(_ sessionId: String) {
         activeSessionId = sessionId
         // Completion notifications are transient and should carry their own open reason.
-        presentSurface(.completionCard(sessionId: sessionId), reason: .notification)
+        panelCoordinator.presentCompletionCard(sessionId: sessionId, reason: .notification)
         let displaySeconds = SettingsManager.shared.completionCardDisplaySeconds
 
         autoCollapseTask?.cancel()
         autoCollapseTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(displaySeconds))
             guard !Task.isCancelled else { return }
+            guard shouldAutoCollapseCompletionCard(sessionId: sessionId) else { return }
             showNextCompletionOrCollapse()
         }
     }
@@ -151,7 +152,8 @@ extension AppState {
                 return
             }
         }
-        collapseIsland(reason: .notification)
+        // Completion dismissal is a presentation concern, so the panel coordinator owns the final collapse.
+        panelCoordinator.collapse(reason: .notification)
     }
 
     var currentTool: String? {
@@ -216,7 +218,8 @@ extension AppState {
         acknowledgePendingCompletionReview(for: sessionId)
         activeSessionId = sessionId
         if case .collapsed = surface {
-            openSessionList(reason: .click)
+            // Prompt submission is an explicit user action, so reopen through the coordinator to keep state synchronized.
+            panelCoordinator.openSessionList(reason: .click)
         }
         scheduleTerminalIndexPersist(sessionId: sessionId)
         scheduleSave()
@@ -246,14 +249,23 @@ extension AppState {
     }
 
     @discardableResult
-    func focusSession(sessionId: String) -> Bool {
+    func activateSession(_ sessionId: String) -> Bool {
         guard sessions[sessionId] != nil else { return false }
         acknowledgePendingCompletionReview(for: sessionId)
         activeSessionId = sessionId
-        openSessionList(reason: .click)
         startRotationIfNeeded()
         refreshDerivedState()
         return true
+    }
+
+    @discardableResult
+    func focusSession(sessionId: String) -> Bool {
+        panelCoordinator.focusSession(sessionId: sessionId)
+    }
+
+    /// Open a dedicated session detail surface so long transcripts do not resize the list view itself.
+    func showSessionDetail(_ sessionId: String, reason: IslandOpenReason = .click) {
+        panelCoordinator.showSessionDetail(sessionId: sessionId, reason: reason)
     }
 
     func jumpToSession(_ sessionId: String) {
@@ -301,7 +313,7 @@ extension AppState {
     @discardableResult
     func focusSession(cwd: String?, source: String?) -> String? {
         let match = matchingSessionId(cwd: cwd, source: source)
-        guard let match, focusSession(sessionId: match) else { return nil }
+        guard let match, panelCoordinator.focusSession(sessionId: match) else { return nil }
         return match
     }
 
@@ -511,7 +523,8 @@ extension AppState {
         }
 
         if surface == .collapsed && !sessions.isEmpty {
-            openSessionList(reason: .boot)
+            // Preview scenarios should use the same panel entry policy as runtime opens.
+            panelCoordinator.openSessionList(reason: .boot)
         }
 
         refreshDerivedState()
@@ -536,9 +549,11 @@ extension AppState {
 
         if let sessionId = surface.sessionId, sessionId.hasPrefix(Self.testingSessionPrefix) {
             if sessions.isEmpty {
-                collapseIsland(reason: .unknown)
+                // Testing cleanup should reset the panel through the same coordinator path as runtime teardown.
+                panelCoordinator.collapse(reason: .unknown)
             } else {
-                openSessionList(reason: .unknown)
+                // Testing cleanup should restore the default list surface through the coordinator.
+                panelCoordinator.openSessionList(reason: .unknown)
             }
         }
 
@@ -564,7 +579,8 @@ extension AppState {
         pendingCompletionReviewSessionIds.removeAll()
         activeSessionId = nil
         rotatingSessionId = nil
-        collapseIsland(reason: .unknown)
+        // Global session reset is a presentation transition, so keep it routed through the panel coordinator.
+        panelCoordinator.collapse(reason: .unknown)
         codexRefreshService.clearLatestTurnIds()
 
         SessionPersistence.clear()

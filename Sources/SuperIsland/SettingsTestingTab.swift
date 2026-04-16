@@ -102,6 +102,54 @@ struct TestingPage: View {
                 Text(l10n["testing_send_notification_desc"])
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                Button {
+                    appState?.triggerTestingCompletionHook(mode: .simultaneous)
+                    statusMessage = localizedTestingString(
+                        english: "Triggered 3 completion sessions at once",
+                        chinese: "已同时触发 3 个完成会话"
+                    )
+                    statusIsError = false
+                } label: {
+                    Text(localizedTestingString(
+                        english: "Trigger Simultaneous Completions",
+                        chinese: "同时触发多个完成会话"
+                    ))
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(appState == nil)
+
+                Text(localizedTestingString(
+                    english: "Immediately enqueue 3 finished sessions to verify queue order, detail entry, and collapse behavior.",
+                    chinese: "立即注入 3 个已完成会话，用来验证队列顺序、详情进入和收起逻辑。"
+                ))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                Button {
+                    appState?.triggerTestingCompletionHook(mode: .staggered)
+                    statusMessage = localizedTestingString(
+                        english: "Started 3 staggered completions, 1 second apart",
+                        chinese: "已开始按 1 秒间隔触发 3 个完成会话"
+                    )
+                    statusIsError = false
+                } label: {
+                    Text(localizedTestingString(
+                        english: "Trigger Staggered Completions",
+                        chinese: "间隔触发多个完成会话"
+                    ))
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(appState == nil)
+
+                Text(localizedTestingString(
+                    english: "Inject 3 completions with a 1-second delay between them to simulate real hook bursts.",
+                    chinese: "按 1 秒间隔依次注入 3 个完成会话，模拟真实 hook 连续完成的场景。"
+                ))
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
 
             Section(l10n["testing_data_section"]) {
@@ -133,5 +181,10 @@ struct TestingPage: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// Keep new testing-hook copy localized without expanding the already oversized shared translation file.
+    private func localizedTestingString(english: String, chinese: String) -> String {
+        l10n.effectiveLanguage == "zh" ? chinese : english
     }
 }

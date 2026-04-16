@@ -20,6 +20,7 @@ extension UsageMonitorCommand {
             return nil
         }
 
+        let referenceDate = Date(timeIntervalSince1970: now)
         let primaryRemaining = AutomationUsageMonitorSupport.clampPercentage(100 - quota.primary.usedPercent)
         let secondaryRemaining = AutomationUsageMonitorSupport.clampPercentage(100 - quota.secondary.usedPercent)
         let usageHistory = CodexMonthlyUsageCalculator.loadUsageHistory()
@@ -30,7 +31,13 @@ extension UsageMonitorCommand {
                 percentage: primaryRemaining,
                 detail: AutomationUsageMonitorSupport.codexWindowDetail(
                     resetAtUnix: quota.primary.resetAtUnix,
-                    resetAfterSeconds: quota.primary.resetAfterSeconds
+                    resetAfterSeconds: quota.primary.resetAfterSeconds,
+                    now: referenceDate
+                ),
+                refreshAtUnix: AutomationUsageMonitorSupport.codexResetAtUnix(
+                    resetAtUnix: quota.primary.resetAtUnix,
+                    resetAfterSeconds: quota.primary.resetAfterSeconds,
+                    now: referenceDate
                 ),
                 tintHex: AutomationUsageMonitorSupport.tintHex(forRemainingPercentage: primaryRemaining)
             ),
@@ -39,7 +46,13 @@ extension UsageMonitorCommand {
                 percentage: secondaryRemaining,
                 detail: AutomationUsageMonitorSupport.codexWindowDetail(
                     resetAtUnix: quota.secondary.resetAtUnix,
-                    resetAfterSeconds: quota.secondary.resetAfterSeconds
+                    resetAfterSeconds: quota.secondary.resetAfterSeconds,
+                    now: referenceDate
+                ),
+                refreshAtUnix: AutomationUsageMonitorSupport.codexResetAtUnix(
+                    resetAtUnix: quota.secondary.resetAtUnix,
+                    resetAfterSeconds: quota.secondary.resetAfterSeconds,
+                    now: referenceDate
                 ),
                 tintHex: AutomationUsageMonitorSupport.tintHex(forRemainingPercentage: secondaryRemaining)
             ),

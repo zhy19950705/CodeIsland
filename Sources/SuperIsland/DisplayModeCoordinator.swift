@@ -119,7 +119,7 @@ final class DisplayModeCoordinator {
         }
 
         switch appState.surface {
-        case .approvalCard, .questionCard, .completionCard:
+        case .sessionDetail, .approvalCard, .questionCard, .completionCard:
             StatusItemController.shared.showPopover()
         case .collapsed, .sessionList:
             break
@@ -156,11 +156,8 @@ final class DisplayModeCoordinator {
     }
 
     private func toggleNotchSurface() {
-        if appState.surface.isExpanded {
-            appState.collapseIsland(reason: .click)
-        } else {
-            appState.openSessionList(reason: .click)
-        }
+        // Route explicit primary-surface toggles through the panel coordinator so click policy stays in one place.
+        appState.panelCoordinator.togglePrimarySurface()
     }
 
     nonisolated static func resolveMode(

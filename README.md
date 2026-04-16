@@ -162,5 +162,7 @@ This project was inspired by [claude-island](https://github.com/farouqaldori/cla
 MIT License — see [LICENSE](LICENSE) for details.
 
 
-## debug
-log show --predicate 'process == "SuperIsland"' --last 1h
+## 排查问题
+sw_vers -productVersion
+spctl --assess -vv /Applications/SuperIsland.app
+log show --predicate 'process == "SuperIsland"' --last 10m

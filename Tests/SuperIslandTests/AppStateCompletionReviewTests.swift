@@ -110,6 +110,47 @@ final class AppStateCompletionReviewTests: XCTestCase {
         XCTAssertFalse(appState.needsCompletionReview(sessionId: "done"))
     }
 
+    func testTestingCompletionHookSimultaneousModeShowsFirstAndQueuesRemainingSessions() {
+        let appState = AppState()
+        defer { appState.teardown() }
+
+        appState.triggerTestingCompletionHook(mode: .simultaneous)
+
+        XCTAssertEqual(appState.justCompletedSessionId, "\(AppState.testingCompletionHookPrefix)1")
+        XCTAssertEqual(
+            appState.completionQueue,
+            [
+                "\(AppState.testingCompletionHookPrefix)2",
+                "\(AppState.testingCompletionHookPrefix)3",
+            ]
+        )
+        XCTAssertTrue(appState.needsCompletionReview(sessionId: "\(AppState.testingCompletionHookPrefix)1"))
+        XCTAssertTrue(appState.needsCompletionReview(sessionId: "\(AppState.testingCompletionHookPrefix)2"))
+        XCTAssertTrue(appState.needsCompletionReview(sessionId: "\(AppState.testingCompletionHookPrefix)3"))
+    }
+
+    func testTestingCompletionHookStaggeredModeAppendsSessionsOverTime() async {
+        let appState = AppState()
+        defer { appState.teardown() }
+
+        appState.triggerTestingCompletionHook(mode: .staggered, interval: .milliseconds(20))
+
+        XCTAssertEqual(appState.justCompletedSessionId, "\(AppState.testingCompletionHookPrefix)1")
+        XCTAssertTrue(appState.completionQueue.isEmpty)
+
+        try? await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(appState.completionQueue, ["\(AppState.testingCompletionHookPrefix)2"])
+
+        try? await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(
+            appState.completionQueue,
+            [
+                "\(AppState.testingCompletionHookPrefix)2",
+                "\(AppState.testingCompletionHookPrefix)3",
+            ]
+        )
+    }
+
     func testNewActivityClearsPendingCompletionReview() {
         let appState = AppState()
 

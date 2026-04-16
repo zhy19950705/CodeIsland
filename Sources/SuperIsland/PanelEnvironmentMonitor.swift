@@ -117,11 +117,34 @@ final class PanelEnvironmentMonitor {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.handlers?.updateVisibility()
-                self?.handlers?.updatePositionIfNeeded()
+                // Defer window/frame reconciliation one run-loop turn so SwiftUI can
+                // finish swapping detail/list content before AppKit resizes the panel.
+                DispatchQueue.main.async { [weak self] in
+                    self?.handlers?.updateVisibility()
+                    // Surface transitions change the intended panel height, so forcing a
+                    // full frame sync is safer than relying on approximate equality.
+                    self?.handlers?.updatePosition()
+                }
             }
         }
         observers.append(panelStateObserver)
+
+        let conversationStateObserver = NotificationCenter.default.addObserver(
+            forName: .superIslandConversationStateDidChange,
+            object: ChatHistoryManager.shared,
+            queue: .main
+        ) { [weak self] note in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let sessionId = note.userInfo?[ChatHistoryManager.sessionIdUserInfoKey] as? String
+                guard self.shouldRefreshDetailLayout(for: appState.surface, sessionId: sessionId) else { return }
+                // Transcript parsing completes after the surface is already on screen, so only the frame needs reconciling here.
+                DispatchQueue.main.async { [weak self] in
+                    self?.handlers?.updatePositionIfNeeded()
+                }
+            }
+        }
+        observers.append(conversationStateObserver)
 
         let settingsObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification,
@@ -156,6 +179,13 @@ final class PanelEnvironmentMonitor {
         }
         observers.removeAll()
         handlers = nil
+    }
+
+    /// Ignore transcript updates for background sessions so panel resizing only tracks the currently visible detail surface.
+    private func shouldRefreshDetailLayout(for surface: IslandSurface, sessionId: String?) -> Bool {
+        guard case .sessionDetail(let activeSessionId) = surface else { return false }
+        guard let sessionId else { return true }
+        return sessionId == activeSessionId
     }
 
     private func handleActiveSpaceChange() {

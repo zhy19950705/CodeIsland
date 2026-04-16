@@ -43,8 +43,8 @@ struct UsageProviderRow: View {
             }
             if provider.hasQuotaMetrics {
                 HStack(spacing: 10) {
-                    usageBadge(title: provider.primary.label, percentage: provider.primary.percentage, detail: provider.primary.detail)
-                    usageBadge(title: provider.secondary.label, percentage: provider.secondary.percentage, detail: provider.secondary.detail)
+                    usageBadge(title: provider.primary.badgeTitle(), percentage: provider.primary.percentage, detail: provider.primary.detail)
+                    usageBadge(title: provider.secondary.badgeTitle(), percentage: provider.secondary.percentage, detail: provider.secondary.detail)
                 }
             }
             if let summary = provider.summary, !summary.isEmpty {

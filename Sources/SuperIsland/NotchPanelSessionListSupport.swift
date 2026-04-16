@@ -136,7 +136,7 @@ struct SessionIdentityLine: View {
             )
             .layoutPriority(2)
 
-            if let sessionLabel = session.sessionLabel {
+            if let sessionLabel = session.sessionLabel, !sessionLabel.isEmpty {
                 Text("#\(sessionLabel)")
                     .font(.system(size: sessionFontSize, weight: .medium, design: .monospaced))
                     .foregroundStyle(sessionColor)
@@ -150,15 +150,61 @@ struct SessionIdentityLine: View {
 
                 Text("#\(shortSessionId(displaySessionId))")
                     .font(.system(size: sessionFontSize, weight: .medium, design: .monospaced))
-                    .foregroundStyle(sessionColor.opacity(0.6))
+                    .foregroundStyle(sessionColor.opacity(0.62))
                     .fixedSize()
             } else {
                 Text("#\(shortSessionId(displaySessionId))")
                     .font(.system(size: sessionFontSize, weight: .medium, design: .monospaced))
-                    .foregroundStyle(sessionColor.opacity(0.6))
+                    .foregroundStyle(sessionColor.opacity(0.62))
                     .fixedSize()
             }
         }
+    }
+}
+
+/// Status tags travel together as one trailing group so rows stay aligned even when
+/// project names or session labels vary widely from one item to another.
+struct SessionStatusTagRow: View {
+    let session: SessionSnapshot
+    let needsCompletionReview: Bool
+    let completionReviewColor: Color
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if session.interrupted {
+                SessionTag("INT", color: Color(red: 1.0, green: 0.6, blue: 0.2))
+            }
+            if session.isYoloMode == true {
+                SessionTag("YOLO", color: Color(red: 1.0, green: 0.35, blue: 0.35))
+            }
+            if needsCompletionReview {
+                SessionTag(L10n.shared["completion_pending_review"], color: completionReviewColor)
+            }
+            SessionTag(timeAgoText(session.lastActivity))
+        }
+    }
+}
+
+/// Bundle tags and the jump affordance into one trailing cluster so the card header
+/// follows the same alignment strategy used by the sibling island projects.
+struct SessionTrailingMetaColumn: View {
+    let session: SessionSnapshot
+    let needsCompletionReview: Bool
+    let completionReviewColor: Color
+    let onJump: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            SessionStatusTagRow(
+                session: session,
+                needsCompletionReview: needsCompletionReview,
+                completionReviewColor: completionReviewColor
+            )
+
+            SessionJumpButton(session: session, action: onJump)
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .fixedSize(horizontal: true, vertical: false)
     }
 }
 
@@ -210,6 +256,13 @@ struct SessionsExpandLink: View {
             }
         }
     }
+}
+
+/// List rows keep a strict two-line preview contract so the expanded island stays
+/// scan-friendly and longer transcript reading is pushed into the detail surface.
+struct SessionListPreviewLines: Equatable {
+    let userText: String?
+    let assistantText: String?
 }
 
 /// Generate a short session ID with better disambiguation.
@@ -273,6 +326,28 @@ func condensedMessagePreview(_ text: String) -> String {
         }
         .joined(separator: "\n")
         .trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+extension SessionSnapshot {
+    /// Build one user line plus one assistant or status line for list rendering.
+    var fixedListPreviewLines: SessionListPreviewLines {
+        let messages = latestConversationPreviewMessages
+        let userText = messages.last(where: \.isUser)?.text
+
+        if status != .idle {
+            let statusText = (toolDescription ?? currentTool ?? "thinking")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return SessionListPreviewLines(
+                userText: userText,
+                assistantText: statusText.isEmpty ? "thinking" : statusText
+            )
+        }
+
+        return SessionListPreviewLines(
+            userText: userText,
+            assistantText: messages.last(where: { !$0.isUser })?.text
+        )
+    }
 }
 
 func timeAgoText(_ date: Date) -> String {

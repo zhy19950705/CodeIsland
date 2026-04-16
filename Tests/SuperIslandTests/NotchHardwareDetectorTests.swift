@@ -20,6 +20,26 @@ final class NotchHardwareDetectorTests: XCTestCase {
         XCTAssertEqual(width, 222, accuracy: 0.001)
     }
 
+    func testResolvedHardwareWidthUsesAuxiliaryAreasInsteadOfFullScreenWidth() {
+        let width = NotchHardwareDetector.resolvedHardwareWidth(
+            screenWidth: 1512,
+            auxiliaryLeftWidth: 664,
+            auxiliaryRightWidth: 664
+        )
+
+        XCTAssertEqual(width, 184)
+    }
+
+    func testResolvedHardwareWidthFallsBackWhenAuxiliaryAreasAreUnavailable() {
+        let width = NotchHardwareDetector.resolvedHardwareWidth(
+            screenWidth: 1512,
+            auxiliaryLeftWidth: nil,
+            auxiliaryRightWidth: nil
+        )
+
+        XCTAssertNil(width)
+    }
+
     func testClampedHorizontalOffsetKeepsIslandInsideScreenBounds() {
         let offset = NotchHardwareDetector.clampedHorizontalOffset(
             storedOffset: 500,

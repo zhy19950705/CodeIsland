@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import UniformTypeIdentifiers
 import SuperIslandCore
 
 // Workspace jump entry points and target dispatch stay here; platform-specific helpers live in support files.
@@ -167,6 +168,26 @@ final class WorkspaceJumpManager {
 
     func fallbackTitles(for session: SessionSnapshot) -> [String] {
         fallbackChain(for: session).map { $0.title }
+    }
+
+    // Detail footer buttons use app icons so the workspace handoff target stays immediately recognizable.
+    func applicationIcon(for target: JumpTarget) -> NSImage? {
+        switch target {
+        case .finder:
+            return NSWorkspace.shared.icon(for: .folder)
+        default:
+            guard let descriptor = applicationDescriptors[target],
+                  let applicationURL = workspace.urlForApplication(withBundleIdentifier: descriptor.bundleIdentifier) else {
+                return nil
+            }
+            return workspace.icon(forFile: applicationURL.path)
+        }
+    }
+
+    // Resolve the icon from the same target selection used by editor jumps so button copy and icon never diverge.
+    func resolvedEditorIcon(for session: SessionSnapshot) -> NSImage? {
+        guard let target = resolvedEditorTarget(for: session) else { return nil }
+        return applicationIcon(for: target)
     }
 
     // Dispatch stays centralized here so target-specific behavior remains easy to audit.

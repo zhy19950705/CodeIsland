@@ -2,21 +2,31 @@ import Foundation
 
 // Keep pure formatting and normalization logic out of the network-heavy monitor so it can be tested directly.
 enum AutomationUsageMonitorSupport {
+    static func codexResetAtUnix(
+        resetAtUnix: Int,
+        resetAfterSeconds: Int,
+        now: Date = Date()
+    ) -> TimeInterval? {
+        if resetAtUnix > 0 {
+            return TimeInterval(resetAtUnix)
+        }
+        if resetAfterSeconds > 0 {
+            return now.timeIntervalSince1970 + TimeInterval(resetAfterSeconds)
+        }
+        return nil
+    }
+
     static func codexWindowDetail(
         resetAtUnix: Int,
         resetAfterSeconds: Int,
         now: Date = Date()
     ) -> String {
-        if resetAtUnix > 0 {
-            return formatResetDeadline(timestamp: resetAtUnix, now: now)
-        }
-        if resetAfterSeconds > 0 {
-            return formatResetDeadline(
-                timestamp: Int(now.timeIntervalSince1970) + resetAfterSeconds,
-                now: now
-            )
-        }
-        return "--"
+        guard let resetAtUnix = codexResetAtUnix(
+            resetAtUnix: resetAtUnix,
+            resetAfterSeconds: resetAfterSeconds,
+            now: now
+        ) else { return "--" }
+        return formatDuration(seconds: Int(resetAtUnix - now.timeIntervalSince1970))
     }
 
     static func claudeWindowDetail(resetAt: TimeInterval?, now: Date = Date()) -> String {
@@ -45,7 +55,7 @@ enum AutomationUsageMonitorSupport {
         let formatter = DateFormatter()
         let target = Date(timeIntervalSince1970: TimeInterval(timestamp))
 
-        if calendar.isDateInToday(target) {
+        if calendar.isDate(target, inSameDayAs: now) {
             formatter.dateFormat = "HH:mm"
             return formatter.string(from: target)
         }
@@ -53,6 +63,33 @@ enum AutomationUsageMonitorSupport {
         let currentYear = calendar.component(.year, from: now)
         let targetYear = calendar.component(.year, from: target)
         formatter.dateFormat = currentYear == targetYear ? "M/d" : "yyyy-MM-dd"
+        return formatter.string(from: target)
+    }
+
+    static func formatRefreshTimestamp(
+        timestamp: TimeInterval,
+        now: Date = Date(),
+        calendar: Calendar = .current,
+        locale: Locale = .current,
+        timeZone: TimeZone = .current
+    ) -> String {
+        guard timestamp > 0 else { return "--" }
+
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = locale
+        formatter.timeZone = timeZone
+
+        let target = Date(timeIntervalSince1970: timestamp)
+        if calendar.isDate(target, inSameDayAs: now) {
+            formatter.dateFormat = "HH:mm"
+            return formatter.string(from: target)
+        }
+
+        // Match the compact settings style: show only the date once the refresh crosses into another day.
+        let currentYear = calendar.component(.year, from: now)
+        let targetYear = calendar.component(.year, from: target)
+        formatter.dateFormat = currentYear == targetYear ? "M月d日" : "yyyy年M月d日"
         return formatter.string(from: target)
     }
 

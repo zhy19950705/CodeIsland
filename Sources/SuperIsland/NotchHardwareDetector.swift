@@ -28,6 +28,22 @@ enum NotchHardwareDetector {
         min(max(screenWidth * 0.14, minVirtualWidth), maxVirtualWidth)
     }
 
+    /// Hardware notch width must come from the auxiliary top areas.
+    /// `safeAreaInsets.top` only tells us that a notch exists, not how wide the cutout is.
+    static func resolvedHardwareWidth(
+        screenWidth: CGFloat,
+        auxiliaryLeftWidth: CGFloat?,
+        auxiliaryRightWidth: CGFloat?
+    ) -> CGFloat? {
+        let leftWidth = auxiliaryLeftWidth ?? 0
+        let rightWidth = auxiliaryRightWidth ?? 0
+        guard leftWidth > 0 || rightWidth > 0 else { return nil }
+
+        let measuredWidth = screenWidth - leftWidth - rightWidth
+        guard measuredWidth > 0 else { return nil }
+        return measuredWidth
+    }
+
     /// Prefer a user override first, then measured hardware width, then the virtual fallback.
     static func resolvedNotchWidth(
         on screen: NSScreen,
@@ -43,17 +59,13 @@ enum NotchHardwareDetector {
         }
 
         if #available(macOS 12.0, *) {
-            let insets = screen.safeAreaInsets
-            let measuredWidth = screen.frame.width - insets.left - insets.right
-            if measuredWidth > 0 {
+            if let measuredWidth = resolvedHardwareWidth(
+                screenWidth: screen.frame.width,
+                auxiliaryLeftWidth: screen.auxiliaryTopLeftArea?.width,
+                auxiliaryRightWidth: screen.auxiliaryTopRightArea?.width
+            ) {
                 return measuredWidth
             }
-        }
-
-        let leftWidth = screen.auxiliaryTopLeftArea?.width ?? 0
-        let rightWidth = screen.auxiliaryTopRightArea?.width ?? 0
-        if leftWidth > 0 || rightWidth > 0 {
-            return max(0, screen.frame.width - leftWidth - rightWidth)
         }
 
         return fallbackVirtualWidth(for: screen.frame.width)

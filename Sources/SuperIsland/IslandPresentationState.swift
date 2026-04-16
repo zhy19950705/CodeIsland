@@ -13,15 +13,26 @@ enum IslandOpenReason: Equatable {
     case click
     case hover
     case notification
+    case pinned
     case shortcut
     case deeplink
     case boot
     case unknown
 }
 
+/// Tracks pointer-driven panel behavior separately from surface content so hover and tap can be coordinated deterministically.
+enum NotchInteractionState: Equatable {
+    case collapsed
+    case hovering
+    case expanded
+    case dismissing
+    case pinned
+}
+
 /// Separates "what is shown" from "how it is shown".
 enum IslandContentType: Equatable {
     case sessions
+    case detail(sessionId: String)
     case approval(sessionId: String)
     case question(sessionId: String)
     case completion(sessionId: String)
@@ -42,7 +53,7 @@ extension IslandSurface {
             return .closed
         case .completionCard:
             return .popping
-        case .sessionList, .approvalCard, .questionCard:
+        case .sessionList, .sessionDetail, .approvalCard, .questionCard:
             return .opened
         }
     }
@@ -51,6 +62,8 @@ extension IslandSurface {
         switch self {
         case .collapsed, .sessionList:
             return .sessions
+        case .sessionDetail(let sessionId):
+            return .detail(sessionId: sessionId)
         case .approvalCard(let sessionId):
             return .approval(sessionId: sessionId)
         case .questionCard(let sessionId):
@@ -63,7 +76,7 @@ extension IslandSurface {
     /// Persist the last user-facing expanded content so re-open flows have a stable target.
     var canRestoreWhenReopened: Bool {
         switch self {
-        case .sessionList, .approvalCard, .questionCard:
+        case .sessionList, .sessionDetail, .approvalCard, .questionCard:
             return true
         case .collapsed, .completionCard:
             return false
@@ -81,8 +94,8 @@ extension AppState {
         )
     }
 
-    /// Centralize surface transitions so the open reason and restore target stay in sync.
-    func presentSurface(
+    /// Low-level surface mutation used by the panel coordinator once interaction policy has already been decided.
+    func setSurface(
         _ nextSurface: IslandSurface,
         reason: IslandOpenReason = .unknown,
         animation: Animation? = nil
@@ -101,11 +114,20 @@ extension AppState {
         }
     }
 
+    /// Keep the original presentation helper for compatibility in tests and incremental refactors.
+    func presentSurface(
+        _ nextSurface: IslandSurface,
+        reason: IslandOpenReason = .unknown,
+        animation: Animation? = nil
+    ) {
+        setSurface(nextSurface, reason: reason, animation: animation)
+    }
+
     func collapseIsland(
         reason: IslandOpenReason = .unknown,
         animation: Animation = NotchAnimation.close
     ) {
-        presentSurface(.collapsed, reason: reason, animation: animation)
+        panelCoordinator.collapse(reason: reason, animation: animation)
     }
 
     /// Reopen to the last meaningful surface when possible instead of always resetting to the session list.
@@ -113,22 +135,41 @@ extension AppState {
         reason: IslandOpenReason = .unknown,
         animation: Animation = NotchAnimation.open
     ) {
-        presentSurface(restorableSurfaceForOpen(), reason: reason, animation: animation)
-        cancelCompletionQueue()
-        if activeSessionId == nil {
-            activeSessionId = preferredSessionId
-        }
+        panelCoordinator.openSessionList(reason: reason, animation: animation)
     }
 
     /// Pending blocking interactions beat stale restore targets so the island reopens to the right card.
-    private func restorableSurfaceForOpen() -> IslandSurface {
+    func resolvedSurfaceForOpen(reason: IslandOpenReason) -> IslandSurface {
         switch lastRestorableSurface {
         case .approvalCard(let sessionId):
             return pendingPermission == nil ? .sessionList : .approvalCard(sessionId: sessionId)
         case .questionCard(let sessionId):
             return pendingQuestion == nil ? .sessionList : .questionCard(sessionId: sessionId)
+        case .sessionDetail(let sessionId):
+            // Hover reopen should stay lightweight and return to the list instead of jumping back into detail.
+            guard reopensDetailSurface(for: reason), sessions[sessionId] != nil else {
+                return .sessionList
+            }
+            return .sessionDetail(sessionId: sessionId)
         case .sessionList, .collapsed, .completionCard:
             return .sessionList
+        }
+    }
+
+    /// Coordinator helpers still need a single source of truth for the "pick a sensible active session" fallback.
+    func ensurePreferredActiveSession() {
+        if activeSessionId == nil {
+            activeSessionId = preferredSessionId
+        }
+    }
+
+    /// Only explicit open actions should restore the dedicated detail surface after a collapse.
+    private func reopensDetailSurface(for reason: IslandOpenReason) -> Bool {
+        switch reason {
+        case .click, .pinned, .shortcut, .deeplink:
+            return true
+        case .hover, .notification, .boot, .unknown:
+            return false
         }
     }
 }

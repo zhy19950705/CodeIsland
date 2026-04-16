@@ -8,7 +8,8 @@ private struct CompactSessionRenderSignature: Equatable {
     let projectName: String
     let sessionLabel: String?
     let displaySessionId: String
-    let previewText: String?
+    let previewUserText: String?
+    let previewAssistantText: String?
     let sourceLabel: String
     let terminalName: String?
     let interrupted: Bool
@@ -24,11 +25,20 @@ struct CompactSessionRow: View, Equatable {
     let isSelected: Bool
     let needsCompletionReview: Bool
     @State private var hovering = false
-    @AppStorage(SettingsKey.aiMessageLines) private var aiMessageLines = SettingsDefaults.aiMessageLines
 
     static func == (lhs: CompactSessionRow, rhs: CompactSessionRow) -> Bool {
         lhs.isSelected == rhs.isSelected
             && lhs.renderSignature == rhs.renderSignature
+    }
+
+    private var chrome: SessionRowChromeStyle {
+        SessionRowChrome.style(
+            status: session.status,
+            interrupted: session.interrupted,
+            isSelected: isSelected,
+            isHovered: hovering,
+            needsCompletionReview: needsCompletionReview
+        )
     }
 
     private var renderSignature: CompactSessionRenderSignature {
@@ -38,7 +48,8 @@ struct CompactSessionRow: View, Equatable {
             projectName: session.projectDisplayName,
             sessionLabel: session.sessionLabel,
             displaySessionId: session.displaySessionId(sessionId: sessionId),
-            previewText: previewText,
+            previewUserText: previewLines.userText,
+            previewAssistantText: previewLines.assistantText,
             sourceLabel: session.sourceLabel,
             terminalName: session.terminalName,
             interrupted: session.interrupted,
@@ -48,13 +59,62 @@ struct CompactSessionRow: View, Equatable {
         )
     }
 
-    private var previewLineLimit: Int? {
-        guard aiMessageLines > 0 else { return nil }
-        return needsCompletionReview ? max(aiMessageLines, 5) : max(aiMessageLines, 3)
+    /// Compact rows follow the same one-question one-answer rhythm as full cards.
+    private var previewLines: SessionListPreviewLines {
+        session.fixedListPreviewLines
     }
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(alignment: .top, spacing: 8) {
+            rowPrimaryContent
+                .allowsHitTesting(false)
+
+            SessionTrailingMetaColumn(
+                session: session,
+                needsCompletionReview: needsCompletionReview,
+                completionReviewColor: SessionRowChrome.reviewTint
+            ) {
+                appState.jumpToSession(sessionId)
+            }
+            .padding(.top, 1)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(chrome.fill)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(chrome.border, lineWidth: 1)
+        )
+        .overlay(alignment: .leading) {
+            Capsule(style: .continuous)
+                .fill(chrome.rail.opacity(chrome.railOpacity))
+                .frame(width: 2)
+                .padding(.vertical, 9)
+                .padding(.leading, 6)
+        }
+        .padding(.horizontal, 6)
+        .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .onTapGesture {
+            // Compact rows share the same row-wide detail affordance as full cards.
+            appState.panelCoordinator.handleRowTap(sessionId: sessionId)
+        }
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) {
+                self.hovering = hovering
+            }
+        }
+    }
+
+    private var mascotAnimated: Bool {
+        session.status != .idle || isSelected || hovering
+    }
+
+    /// Compact-row text and mascot should visually sit on top of the full-card hit area without becoming nested controls.
+    private var rowPrimaryContent: some View {
+        HStack(alignment: .top, spacing: 10) {
             CompactSessionMascotBadge(
                 source: session.source,
                 status: session.status,
@@ -65,160 +125,57 @@ struct CompactSessionRow: View, Equatable {
             .padding(.top, 1)
 
             VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .center, spacing: 8) {
-                    HStack(spacing: 4) {
-                        Text(session.projectDisplayName)
-                            .font(.system(size: 12.8, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(titleColor)
-                            .lineLimit(1)
+                SessionIdentityLine(
+                    session: session,
+                    sessionId: sessionId,
+                    projectFontSize: 12.8,
+                    projectColor: chrome.title,
+                    sessionFontSize: 10.5,
+                    sessionColor: chrome.secondaryText,
+                    dividerColor: .white.opacity(0.28)
+                )
 
-                        if let label = session.sessionLabel {
-                            Text("#\(label)")
+                VStack(alignment: .leading, spacing: 2) {
+                    if let userText = previewLines.userText, !userText.isEmpty {
+                        HStack(alignment: .top, spacing: 4) {
+                            Text(">")
+                                .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                                .foregroundStyle(Color(red: 0.3, green: 0.85, blue: 0.4))
+                            Text(ChatMessageTextFormatter.literalText(userText))
                                 .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.56))
+                                .foregroundStyle(chrome.primaryText)
                                 .lineLimit(1)
+                                .truncationMode(.tail)
                         }
-
-                        Text("#\(shortSessionId(session.displaySessionId(sessionId: sessionId)))")
-                            .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.34))
-                            .fixedSize()
                     }
 
-                    Spacer(minLength: 8)
-
-                    HStack(spacing: 4) {
-                        if session.interrupted {
-                            SessionTag("INT", color: Color(red: 1.0, green: 0.6, blue: 0.2))
+                    if let assistantText = previewLines.assistantText, !assistantText.isEmpty {
+                        HStack(alignment: .top, spacing: 4) {
+                            Text("$")
+                                .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                                .foregroundStyle(Color(red: 0.85, green: 0.47, blue: 0.34))
+                            Text(ChatMessageTextFormatter.inlineMarkdown(condensedMessagePreview(stripDirectives(assistantText))))
+                                .font(.system(size: 10.5, design: .monospaced))
+                                .foregroundStyle(chrome.secondaryText)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
                         }
-                        if session.isYoloMode == true {
-                            SessionTag("YOLO", color: Color(red: 1.0, green: 0.35, blue: 0.35))
+                    } else {
+                        HStack(alignment: .top, spacing: 4) {
+                            Text("$")
+                                .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                                .foregroundStyle(Color(red: 0.85, green: 0.47, blue: 0.34))
+                            TypingIndicator(
+                                fontSize: 10.5,
+                                label: "thinking",
+                                color: chrome.secondaryText
+                            )
                         }
-                        if needsCompletionReview {
-                            SessionTag(L10n.shared["completion_pending_review"], color: completionReviewColor)
-                        }
-                        SessionTag(timeAgoText(session.lastActivity))
-                        TerminalJumpAccessory(session: session, isHovered: hovering)
-                    }
-                }
-
-                HStack(alignment: .top, spacing: 6) {
-                    if let previewText, !previewText.isEmpty {
-                        Text(previewText)
-                            .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                            .foregroundStyle(.white.opacity(isSelected ? 0.72 : 0.54))
-                            .lineLimit(previewLineLimit)
-                            .truncationMode(.tail)
-                            .multilineTextAlignment(.leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .layoutPriority(1)
-                    } else if session.status != .idle {
-                        Text("thinking")
-                            .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.46))
-                            .lineLimit(1)
                     }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(backgroundColor)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .strokeBorder(borderColor, lineWidth: 1)
-        )
-        .padding(.horizontal, 6)
-        .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-        .onHover { hovering in
-            withAnimation(.easeOut(duration: 0.12)) {
-                self.hovering = hovering
-            }
-        }
-        .onTapGesture {
-            appState.jumpToSession(sessionId)
-        }
-    }
-
-    private var previewText: String? {
-        if session.status != .idle, let tool = session.currentTool {
-            let value = (session.toolDescription ?? tool).trimmingCharacters(in: .whitespacesAndNewlines)
-            return value.isEmpty ? tool : value
-        }
-
-        if let assistant = session.lastAssistantMessage {
-            let cleaned = condensedMessagePreview(stripDirectives(assistant))
-            if !cleaned.isEmpty {
-                return cleaned
-            }
-        }
-
-        if let prompt = session.lastUserPrompt?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !prompt.isEmpty {
-            return prompt
-        }
-
-        if let lastMessage = session.recentMessages.last?.text {
-            let cleaned = condensedMessagePreview(stripDirectives(lastMessage))
-            return cleaned.isEmpty ? nil : cleaned
-        }
-
-        return nil
-    }
-
-    private var titleColor: Color {
-        if isSelected {
-            return .white.opacity(0.92)
-        }
-        if hovering {
-            return .white.opacity(0.82)
-        }
-        switch session.status {
-        case .processing, .running:
-            return Color(red: 0.3, green: 0.85, blue: 0.4).opacity(0.92)
-        case .waitingApproval, .waitingQuestion:
-            return Color(red: 1.0, green: 0.6, blue: 0.2).opacity(0.92)
-        case .idle:
-            return .white.opacity(0.74)
-        }
-    }
-
-    private var backgroundColor: Color {
-        if isSelected {
-            return Color.white.opacity(0.11)
-        }
-        if needsCompletionReview {
-            return hovering ? completionReviewColor.opacity(0.22) : completionReviewColor.opacity(0.16)
-        }
-        if hovering {
-            return Color.white.opacity(0.08)
-        }
-        return Color.white.opacity(0.035)
-    }
-
-    private var borderColor: Color {
-        if isSelected {
-            return Color.white.opacity(0.12)
-        }
-        if needsCompletionReview {
-            return completionReviewColor.opacity(hovering ? 0.42 : 0.30)
-        }
-        if hovering {
-            return Color.white.opacity(0.08)
-        }
-        return Color.clear
-    }
-
-    private var completionReviewColor: Color {
-        Color(red: 0.32, green: 0.74, blue: 1.0)
-    }
-
-    private var mascotAnimated: Bool {
-        session.status != .idle || isSelected || hovering
     }
 }
 
@@ -255,33 +212,36 @@ private struct CompactSessionMascotBadge: View {
     }
 
     private var chipFill: Color {
-        if isSelected {
-            return Color.white.opacity(0.09)
-        }
-        if isHovered {
-            return Color.white.opacity(0.06)
-        }
-        return Color.white.opacity(0.03)
+        let style = SessionRowChrome.style(
+            status: status,
+            interrupted: false,
+            isSelected: isSelected,
+            isHovered: isHovered,
+            needsCompletionReview: false
+        )
+        return style.symbolFill
     }
 
     private var chipBorder: Color {
-        if isSelected {
-            return Color.white.opacity(0.12)
-        }
-        if isHovered {
-            return Color.white.opacity(0.08)
-        }
-        return Color.white.opacity(0.04)
+        let style = SessionRowChrome.style(
+            status: status,
+            interrupted: false,
+            isSelected: isSelected,
+            isHovered: isHovered,
+            needsCompletionReview: false
+        )
+        return style.symbolBorder
     }
 
     private var primaryTint: Color {
-        switch status {
-        case .processing, .running:
-            return Color(red: 0.3, green: 0.85, blue: 0.4).opacity(isSelected || isHovered ? 1 : 0.8)
-        case .waitingApproval, .waitingQuestion:
-            return Color(red: 1.0, green: 0.6, blue: 0.2).opacity(isSelected || isHovered ? 1 : 0.82)
-        case .idle:
-            return Color.white.opacity(isSelected || isHovered ? 0.5 : 0.26)
+        let accent = SessionRowChrome.accent(
+            status: status,
+            interrupted: false,
+            needsCompletionReview: false
+        )
+        if status == .idle {
+            return accent.opacity(isSelected || isHovered ? 0.52 : 0.28)
         }
+        return accent.opacity(isSelected || isHovered ? 1 : 0.84)
     }
 }

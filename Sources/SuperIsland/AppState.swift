@@ -65,6 +65,8 @@ final class AppState {
     var maxHistory: Int { SettingsManager.shared.maxToolHistory }
     var autoCollapseTask: Task<Void, Never>?
     var completionQueue: [String] = []
+    /// Testing hooks can stage delayed completion injections, so keep the active task cancellable across repeated runs.
+    @ObservationIgnored var testingCompletionInjectionTask: Task<Void, Never>?
     var processMonitors: [String: (source: DispatchSourceProcess, pid: pid_t)] = [:]
     var saveTimer: Timer?
     var terminalIndexFlushTask: Task<Void, Never>?
@@ -105,6 +107,8 @@ final class AppState {
     var primarySource: String = "claude"
     var activeSessionCount: Int = 0
     var totalSessionCount: Int = 0
+    /// The panel coordinator owns transient hover/click behavior so AppState can stay focused on data and mutations.
+    @ObservationIgnored lazy var panelCoordinator = IslandPanelCoordinator(appState: self)
 
     init() {
         codexRefreshService = CodexRefreshService()
@@ -198,6 +202,8 @@ final class AppState {
 
         autoCollapseTask?.cancel()
         autoCollapseTask = nil
+        testingCompletionInjectionTask?.cancel()
+        testingCompletionInjectionTask = nil
         terminalIndexFlushTask?.cancel()
         terminalIndexFlushTask = nil
 

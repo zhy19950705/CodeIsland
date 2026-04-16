@@ -54,7 +54,7 @@ extension AppState {
         permissionQueue.append(request)
 
         activeSessionId = sessionId
-        presentSurface(.approvalCard(sessionId: sessionId), reason: .notification)
+        panelCoordinator.presentBlockingCard(.approvalCard(sessionId: sessionId), reason: .notification)
         SoundManager.shared.handleEvent("PermissionRequest")
         scheduleSave()
         startRotationIfNeeded()
@@ -72,7 +72,11 @@ extension AppState {
         questionQueue.append(request)
 
         activeSessionId = sessionId
-        presentSurface(.questionCard(sessionId: sessionId), reason: .notification, animation: NotchAnimation.open)
+        panelCoordinator.presentBlockingCard(
+            .questionCard(sessionId: sessionId),
+            reason: .notification,
+            animation: NotchAnimation.open
+        )
         SoundManager.shared.handleEvent("PermissionRequest")
         scheduleSave()
         startRotationIfNeeded()

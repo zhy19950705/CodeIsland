@@ -8,6 +8,7 @@ struct MenuBarPopoverView: View {
 
     var appState: AppState
     var mode: Mode = .contextual
+    @ObservedObject private var historyManager = ChatHistoryManager.shared
 
     private var visibleSurface: IslandSurface {
         if mode == .sessionListOnly {
@@ -38,11 +39,24 @@ struct MenuBarPopoverView: View {
             Divider()
                 .overlay(Color.white.opacity(0.08))
             content
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .frame(maxWidth: .infinity, alignment: .top)
         }
-        .frame(width: 430, height: 560)
+        .frame(width: 430, height: popoverHeight, alignment: .top)
         .background(Color.black)
         .preferredColorScheme(.dark)
+    }
+
+    /// Dedicated transcript detail should follow the same content-aware height budget as the notch panel.
+    private var popoverHeight: CGFloat {
+        switch visibleSurface {
+        case .sessionDetail(let sessionId), .completionCard(let sessionId):
+            return SessionDetailLayoutMetrics.estimatedPopoverHeight(
+                session: appState.sessions[sessionId],
+                conversationState: historyManager.state(for: sessionId)
+            )
+        case .approvalCard, .questionCard, .collapsed, .sessionList:
+            return 560
+        }
     }
 
     private var header: some View {
@@ -76,14 +90,6 @@ struct MenuBarPopoverView: View {
                     .truncationMode(.tail)
 
                 Spacer(minLength: 0)
-
-                if !usageProviders.isEmpty {
-                    HStack(spacing: 6) {
-                        ForEach(usageProviders) { provider in
-                            MenuBarUsageBadge(provider: provider)
-                        }
-                    }
-                }
             }
         }
         .padding(.horizontal, 14)
@@ -99,6 +105,14 @@ struct MenuBarPopoverView: View {
     @ViewBuilder
     private var content: some View {
         switch visibleSurface {
+        case .sessionDetail(let sessionId):
+            if let session = appState.sessions[sessionId] {
+                SessionDetailView(appState: appState, sessionId: sessionId, session: session)
+                    .padding(.top, 8)
+            } else {
+                fallbackSessionList
+            }
+
         case .approvalCard:
             if let pendingPermission = appState.pendingPermission {
                 let sessionId = pendingPermission.event.sessionId ?? appState.activeSessionId
@@ -142,12 +156,13 @@ struct MenuBarPopoverView: View {
                 fallbackSessionList
             }
 
-        case .completionCard:
-            SessionListView(
-                appState: appState,
-                onlySessionId: appState.justCompletedSessionId,
-                presentation: .menuBar
-            )
+        case .completionCard(let sessionId):
+            if let session = appState.sessions[sessionId] {
+                SessionDetailView(appState: appState, sessionId: sessionId, session: session)
+                    .padding(.top, 8)
+            } else {
+                fallbackSessionList
+            }
 
         case .collapsed, .sessionList:
             fallbackSessionList
@@ -174,102 +189,4 @@ struct MenuBarPopoverView: View {
         }
         return appState.primarySource
     }
-}
-
-private struct MenuBarUsageBadge: View {
-    let provider: UsageProviderSnapshot
-
-    var body: some View {
-        HStack(spacing: 6) {
-            MenuBarUsageWindowBadge(
-                title: provider.primary.label,
-                percentage: provider.source.displaysUsedPercentage
-                    ? provider.usedPercentage(for: provider.primary)
-                    : provider.remainingPercentage(for: provider.primary),
-                tintHex: provider.primary.tintHex,
-                isUsed: provider.source.displaysUsedPercentage
-            )
-            MenuBarUsageWindowBadge(
-                title: provider.secondary.label,
-                percentage: provider.source.displaysUsedPercentage
-                    ? provider.usedPercentage(for: provider.secondary)
-                    : provider.remainingPercentage(for: provider.secondary),
-                tintHex: provider.secondary.tintHex,
-                isUsed: provider.source.displaysUsedPercentage
-            )
-        }
-        .help(helpText)
-    }
-
-    private var helpText: String {
-        var lines = [
-            line(for: provider.primary),
-            line(for: provider.secondary),
-        ]
-        if let summary = provider.summary, !summary.isEmpty {
-            lines.append(summary)
-        }
-        return lines.joined(separator: "\n")
-    }
-
-    private func line(for window: UsageWindowStat) -> String {
-        let label = provider.source.displaysUsedPercentage ? L10n.shared["usage_used"] : L10n.shared["usage_remaining"]
-        let percentage = provider.source.displaysUsedPercentage
-            ? provider.usedPercentage(for: window)
-            : provider.remainingPercentage(for: window)
-        return "\(provider.source.title) \(window.label) \(label): \(percentage)% · \(window.detail)"
-    }
-}
-
-private struct MenuBarUsageWindowBadge: View {
-    let title: String
-    let percentage: Int
-    let tintHex: String
-    let isUsed: Bool
-
-    private var tint: Color { menuBarColor(hex: tintHex) }
-
-    var body: some View {
-        HStack(spacing: 3) {
-            Text(title.uppercased())
-                .foregroundStyle(.white.opacity(0.55))
-            Text((isUsed ? L10n.shared["usage_used"] : L10n.shared["usage_remaining"]).uppercased())
-                .foregroundStyle(.white.opacity(0.75))
-            Text("\(percentage)%")
-                .foregroundStyle(tint)
-        }
-        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-        .padding(.horizontal, 6)
-        .padding(.vertical, 4)
-        .background(
-            Capsule(style: .continuous)
-                .fill(.white.opacity(0.08))
-        )
-        .overlay(
-            Capsule(style: .continuous)
-                .strokeBorder(tint.opacity(0.35), lineWidth: 1)
-        )
-    }
-}
-
-private func menuBarColor(hex: String) -> Color {
-    let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-    var int: UInt64 = 0
-    Scanner(string: cleaned).scanHexInt64(&int)
-
-    let r, g, b: UInt64
-    switch cleaned.count {
-    case 3:
-        (r, g, b) = ((int >> 8) * 17, ((int >> 4) & 0xF) * 17, (int & 0xF) * 17)
-    case 6:
-        (r, g, b) = (int >> 16, (int >> 8) & 0xFF, int & 0xFF)
-    default:
-        (r, g, b) = (255, 255, 255)
-    }
-
-    return Color(
-        red: Double(r) / 255.0,
-        green: Double(g) / 255.0,
-        blue: Double(b) / 255.0
-    )
 }

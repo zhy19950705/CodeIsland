@@ -22,10 +22,76 @@ extension PanelWindowController {
         }
 
         let maxSessions = CGFloat(max(2, UserDefaults.standard.integer(forKey: SettingsKey.maxVisibleSessions)))
-        let estimatedHeight = max(300, maxSessions * 90 + 60)
         let maxPanelHeight = CGFloat(max(220, SettingsManager.shared.maxPanelHeight))
-        let height = min(maxPanelHeight, max(collapsedHeight, estimatedHeight))
+        let detailEstimatedHeight = sessionDetailEstimatedHeight()
+        let height = Self.expandedPanelHeight(
+            surface: appState.surface,
+            collapsedHeight: collapsedHeight,
+            maxPanelHeight: maxPanelHeight,
+            screenHeight: screen.frame.height,
+            maxVisibleSessions: maxSessions,
+            detailEstimatedHeight: detailEstimatedHeight
+        )
         return NSSize(width: width, height: height)
+    }
+
+    /// Session detail should be taller than the compact list, but keep it noticeably tighter
+    /// than approval/list surfaces so short transcripts do not feel vertically bloated.
+    nonisolated static func expandedPanelHeight(
+        surface: IslandSurface,
+        collapsedHeight: CGFloat,
+        maxPanelHeight: CGFloat,
+        screenHeight: CGFloat,
+        maxVisibleSessions: CGFloat,
+        detailEstimatedHeight: CGFloat? = nil
+    ) -> CGFloat {
+        let estimatedHeight: CGFloat
+        switch surface {
+        case .sessionDetail, .completionCard:
+            estimatedHeight = detailEstimatedHeight
+                ?? SessionDetailLayoutMetrics.estimatedPanelHeight(session: nil, conversationState: nil)
+        case .approvalCard, .questionCard, .sessionList:
+            let listViewportHeight = SessionListView.notchScrollHeight(
+                maxVisibleSessions: Int(maxVisibleSessions.rounded(.up))
+            )
+            // Leave room for the divider plus expanded-surface top/bottom insets so
+            // the first list row is fully visible below the notch shell.
+            estimatedHeight = max(300, listViewportHeight + 76)
+        case .collapsed:
+            estimatedHeight = collapsedHeight
+        }
+
+        // Session detail should never grow beyond half of the current screen height,
+        // even if the user's global panel cap is larger.
+        let effectiveMaxPanelHeight: CGFloat
+        switch surface {
+        case .sessionDetail, .completionCard:
+            effectiveMaxPanelHeight = SessionDetailLayoutMetrics.maxDetailPanelHeight(
+                maxPanelHeight: maxPanelHeight,
+                screenHeight: screenHeight
+            )
+        case .approvalCard, .questionCard, .sessionList, .collapsed:
+            effectiveMaxPanelHeight = maxPanelHeight
+        }
+
+        return min(effectiveMaxPanelHeight, max(collapsedHeight, estimatedHeight))
+    }
+
+    /// Use parsed transcript state when available so the panel can adapt after the detail view loads real history.
+    private func sessionDetailEstimatedHeight() -> CGFloat? {
+        let sessionId: String
+        switch appState.surface {
+        case .sessionDetail(let activeSessionId), .completionCard(let activeSessionId):
+            sessionId = activeSessionId
+        default:
+            return nil
+        }
+        let session = appState.sessions[sessionId]
+        let conversationState = ChatHistoryManager.shared.state(for: sessionId)
+        return SessionDetailLayoutMetrics.estimatedPanelHeight(
+            session: session,
+            conversationState: conversationState
+        )
     }
 
     /// Runtime sizing always follows the currently selected screen.
@@ -61,11 +127,33 @@ extension PanelWindowController {
         guard let panel else { return }
         let contentView = makeHostingView(for: screen)
         hostingView = contentView
-        panel.contentView = contentView
+        installHostingView(contentView, in: panel)
         lastRenderMetrics = renderMetrics(for: screen)
         lastChosenScreenSignature = ScreenDetector.signature(for: screen)
         syncWindowInteractionBehavior()
         updatePosition()
+        reconcilePointerHoverState()
+    }
+
+    /// Wrap the hosting view in a plain container so the window has more than one view.
+    /// This works around a SwiftUI/AppKit bug where a single-view window throws
+    /// "more Update Constraints in Window passes than there are views" during animated resizes.
+    func installHostingView(_ hostingView: NotchHostingView<NotchPanelView>, in panel: NSPanel) {
+        if let container = panel.contentView, !(container is NotchHostingView<NotchPanelView>) {
+            for subview in container.subviews {
+                subview.removeFromSuperview()
+            }
+            hostingView.frame = container.bounds
+            hostingView.autoresizingMask = [.width, .height]
+            container.addSubview(hostingView)
+        } else {
+            let container = NSView()
+            container.translatesAutoresizingMaskIntoConstraints = true
+            hostingView.frame = container.bounds
+            hostingView.autoresizingMask = [.width, .height]
+            container.addSubview(hostingView)
+            panel.contentView = container
+        }
     }
 
     /// Screen preference changes animate only when the chosen display actually changes.

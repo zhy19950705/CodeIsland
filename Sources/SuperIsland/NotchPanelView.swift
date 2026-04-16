@@ -20,21 +20,11 @@ struct NotchPanelView: View {
     let notchW: CGFloat
     let screenWidth: CGFloat
 
-    @AppStorage(SettingsKey.smartSuppress) private var smartSuppress = SettingsDefaults.smartSuppress
     @AppStorage(SettingsKey.hideWhenNoSession) private var hideWhenNoSession = SettingsDefaults.hideWhenNoSession
     @AppStorage(SettingsKey.showToolStatus) private var showToolStatus = SettingsDefaults.showToolStatus
 
-    /// Delayed hover: prevents accidental expansion when mouse passes through
-    @State private var hoverTimer: Timer?
-    @State private var idleHovered = false
-    /// Track fullscreen state for adaptive hover behavior
-    @State private var isFullscreenActive = false
-    /// Track if mouse is in fullscreen reveal zone (top edge when hidden)
-    @State private var isInFullscreenRevealZone = false
-    @State private var lastFullscreenStateRefreshAt: Date = .distantPast
     @State private var toolStatusCurtainPhase: ToolStatusCurtainPhase = .visible
     @State private var displayedToolStatus: Bool = SettingsDefaults.showToolStatus
-    @State private var completionHasBeenEntered = false
     @State private var toolStatusTransitionTask: Task<Void, Never>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var activityCoordinator = NotchActivityCoordinator.shared
@@ -55,18 +45,6 @@ struct NotchPanelView: View {
     private var shouldShowExpanded: Bool {
         showBar && appState.surface.isExpanded
     }
-    private var compactUsageProvider: UsageProviderSnapshot? {
-        Self.compactUsageProvider(
-            from: appState.usageSnapshot,
-            sessions: appState.sessions,
-            rotatingSessionId: appState.rotatingSessionId,
-            activeSessionId: appState.activeSessionId,
-            primarySource: appState.primarySource
-        )
-    }
-    private var showCompactUsageBadge: Bool {
-        !shouldShowExpanded && compactUsageProvider != nil
-    }
     private var curtainOffset: CGFloat {
         toolStatusCurtainPhase == .concealed ? -notchHeight : 0
     }
@@ -83,15 +61,21 @@ struct NotchPanelView: View {
     /// Total panel width — adapts based on state and screen geometry
     private var panelWidth: CGFloat {
         let maxWidth = min(620, screenWidth - 40)
-        if showIdleIndicator { return idleHovered ? notchW + compactWingWidth * 2 + 80 : notchW + compactWingWidth * 2 }
+        if showIdleIndicator {
+            return appState.panelCoordinator.isPointerInsideInteractiveRegion
+                ? notchW + compactWingWidth * 2 + 80
+                : notchW + compactWingWidth * 2
+        }
         if !isActive { return hasNotch ? notchW - 20 : notchW }
         if shouldShowExpanded { return min(max(notchW + 200, 580), maxWidth) }
-        let wing = compactWingWidth
-        let activityExtra = activityCoordinator.currentExtraWidth
-        // Reserve space for tool status — proportional to screen width
-        let toolExtra: CGFloat = displayedToolStatus ? (hasNotch ? screenWidth * 0.03 : screenWidth * 0.04) : 0
-        let usageExtra: CGFloat = showCompactUsageBadge ? (hasNotch ? 76 : 90) : 0
-        return notchW + wing * 2 + activityExtra + toolExtra + usageExtra
+        return Self.collapsedPanelWidth(
+            notchWidth: notchW,
+            compactWingWidth: compactWingWidth,
+            screenWidth: screenWidth,
+            hasNotch: hasNotch,
+            displayedToolStatus: displayedToolStatus,
+            activityExtraWidth: activityCoordinator.currentExtraWidth
+        )
     }
 
     var body: some View {
@@ -107,11 +91,13 @@ struct NotchPanelView: View {
                     notchW: notchW,
                     notchHeight: notchHeight,
                     hasNotch: hasNotch,
-                    idleHovered: idleHovered,
+                    idleHovered: appState.panelCoordinator.isPointerInsideInteractiveRegion,
                     showToolStatus: showToolStatus
                 )
 
-                // Below-notch expanded content
+                // Match MioIsland's "bounded but content-led" behavior:
+                // expanded content can grow up to the panel height, but it does not
+                // need to occupy all of it when the transcript is short.
                 if shouldShowExpanded {
                     NotchExpandedContentView(appState: appState)
                 }
@@ -134,16 +120,20 @@ struct NotchPanelView: View {
             }
             .onAppear {
                 displayedToolStatus = showToolStatus
-                updateFullscreenState(force: true)
+                appState.panelCoordinator.syncWithPresentationState()
                 syncActivityState()
             }
             .onDisappear {
                 toolStatusTransitionTask?.cancel()
-                cancelHoverTimer()
+                appState.panelCoordinator.cancelPendingInteraction()
             }
-            .onChange(of: appState.surface) { _, newValue in
-                _ = newValue
-                completionHasBeenEntered = false
+            .onChange(of: appState.surface) { _, _ in
+                appState.panelCoordinator.syncWithPresentationState()
+                syncActivityState()
+                NotificationCenter.default.post(name: .superIslandSurfaceDidChange, object: nil)
+            }
+            .onChange(of: appState.lastOpenReason) { _, _ in
+                appState.panelCoordinator.syncWithPresentationState()
                 syncActivityState()
             }
             .onChange(of: appState.status) { _, _ in
@@ -155,129 +145,13 @@ struct NotchPanelView: View {
             .onChange(of: appState.pendingQuestion != nil) { _, _ in
                 syncActivityState()
             }
-            .contentShape(Rectangle())
-            .onContinuousHover(coordinateSpace: .local) { phase in
-                switch phase {
-                case .active(let point):
-                    handleActiveHover(at: point)
-                case .ended:
-                    handleHoverEnded()
-                }
-            }
 
             Spacer()
                 .allowsHitTesting(false)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(NotchAnimation.open, value: appState.surface)
-    }
-
-    private func handleActiveHover(at point: CGPoint) {
-        // Update fullscreen state for adaptive hover behavior
-        updateFullscreenState()
-
-        if shouldIgnoreCollapsedNotchHover(localPoint: point) {
-            cancelHoverTimer()
-            return
-        }
-        handleHoverChange(true)
-    }
-
-    /// Update fullscreen state by checking with panel controller
-    private func updateFullscreenState(force: Bool = false) {
-        let now = Date()
-        if !force, now.timeIntervalSince(lastFullscreenStateRefreshAt) < 0.08 {
-            return
-        }
-        lastFullscreenStateRefreshAt = now
-
-        guard let delegate = NSApp.delegate as? AppDelegate,
-              let panelController = delegate.panelController else { return }
-
-        _ = isFullscreenActive
-        isFullscreenActive = panelController.isFullscreenEdgeRevealActive
-
-        // Check if mouse is in fullscreen reveal zone
-        let wasInRevealZone = isInFullscreenRevealZone
-        isInFullscreenRevealZone = panelController.isMouseInFullscreenRevealZone(
-            panelWidth: panelWidth,
-            notchWidth: notchW,
-            hasNotch: hasNotch
-        )
-
-        // If entering reveal zone, trigger hover immediately
-        if isInFullscreenRevealZone && !wasInRevealZone && !appState.surface.isExpanded {
-            handleHoverChange(true)
-        }
-    }
-
-    private func handleHoverChange(_ hovering: Bool) {
-        if !hovering, shouldIgnoreCollapsedNotchHover(localPoint: nil) {
-            cancelHoverTimer()
-            return
-        }
-
-        // Idle indicator hover
-        if showIdleIndicator {
-            withAnimation(NotchAnimation.micro) { idleHovered = hovering }
-            return
-        }
-        switch appState.surface {
-        case .approvalCard, .questionCard: return
-        case .completionCard:
-            // Completion card: mark entered on hover-in, block collapse until entered
-            if hovering {
-                completionHasBeenEntered = true
-            } else if completionHasBeenEntered {
-                // Mouse entered then left — allow collapse
-                cancelHoverTimer()
-                appState.cancelCompletionQueue()
-                appState.collapseIsland(reason: .hover)
-                }
-            return
-        default: break
-        }
-        // Respect collapseOnMouseLeave setting
-        if !hovering && !SettingsManager.shared.collapseOnMouseLeave { return }
-        // Smart suppress: don't auto-expand when active session's terminal is foreground
-        if hovering && smartSuppress {
-            if let delegate = NSApp.delegate as? AppDelegate,
-               let pc = delegate.panelController,
-               pc.isActiveTerminalForeground() {
-                return
-            }
-        }
-
-        if hovering {
-            if appState.surface.isExpanded {
-                cancelHoverTimer()
-                return
-            }
-            // Delay expansion to avoid accidental triggers (adaptive based on fullscreen state)
-            cancelHoverTimer()
-            let delay = hoverActivationDelay
-            hoverTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak appState] _ in
-                Task { @MainActor in
-                    appState?.openSessionList(reason: .hover)
-                }
-            }
-        } else {
-            // Collapse with brief delay to prevent flicker on accidental mouse-out
-            cancelHoverTimer()
-            hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) { [weak appState] _ in
-                Task { @MainActor in
-                    appState?.collapseIsland(reason: .hover)
-                }
-            }
-        }
-    }
-
-    private func handleHoverEnded() {
-        if shouldIgnoreExpandedHoverEnded() {
-            cancelHoverTimer()
-            return
-        }
-        handleHoverChange(false)
+        .animation(NotchAnimation.micro, value: appState.panelCoordinator.isPointerInsideInteractiveRegion)
     }
 
     private func animateToolStatusTransition(to newValue: Bool) {
@@ -307,19 +181,6 @@ struct NotchPanelView: View {
         }
     }
 
-    /// Adaptive hover activation delay based on fullscreen state
-    private var hoverActivationDelay: TimeInterval {
-        let settings = SettingsManager.shared
-        return isFullscreenActive
-            ? settings.fullscreenHoverActivationDelay
-            : settings.hoverActivationDelay
-    }
-
-    private func cancelHoverTimer() {
-        hoverTimer?.invalidate()
-        hoverTimer = nil
-    }
-
     private func syncActivityState() {
         // Keep transient side expansion logic centralized and deterministic.
         activityCoordinator.sync(
@@ -327,51 +188,5 @@ struct NotchPanelView: View {
             isExpanded: shouldShowExpanded,
             hasBlockingCard: appState.pendingPermission != nil || appState.pendingQuestion != nil
         )
-    }
-
-    private func shouldIgnoreCollapsedNotchHover(localPoint: CGPoint?) -> Bool {
-        // Check fullscreen reveal zone first - if in zone, don't ignore
-        if isInFullscreenRevealZone {
-            return false
-        }
-
-        let ignoresHover = !shouldShowExpanded
-        if let localPoint,
-           Self.isInCollapsedNotchDeadZone(
-               point: localPoint,
-               panelWidth: panelWidth,
-               notchWidth: notchW,
-               hasNotch: hasNotch,
-               ignoresHover: ignoresHover
-           ) {
-            return true
-        }
-
-        guard let delegate = NSApp.delegate as? AppDelegate,
-              let panelController = delegate.panelController else { return false }
-
-        // Check fullscreen reveal zone via panel controller
-        if panelController.isMouseInFullscreenRevealZone(
-            panelWidth: panelWidth,
-            notchWidth: notchW,
-            hasNotch: hasNotch
-        ) {
-            return false
-        }
-
-        return panelController.isMouseInsideCollapsedNotchDeadZone(
-            panelWidth: panelWidth,
-            notchWidth: notchW,
-            notchHeight: notchHeight,
-            hasNotch: hasNotch,
-            ignoresHover: ignoresHover
-        )
-    }
-
-    private func shouldIgnoreExpandedHoverEnded() -> Bool {
-        guard appState.surface.isExpanded,
-              let delegate = NSApp.delegate as? AppDelegate,
-              let panelController = delegate.panelController else { return false }
-        return panelController.isMouseInsidePanelFrame()
     }
 }

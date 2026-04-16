@@ -52,7 +52,9 @@ if [ ! -f "$APP_BUNDLE/Contents/Resources/AppIcon.icns" ] && [ -f "$FALLBACK_ICO
     cp "$FALLBACK_ICON_PATH" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 fi
 
-# Copy the SPM resource bundle into Contents/Resources so the app can be signed.
+# Copy the SPM resource bundle into Contents/Resources so the app bundle keeps
+# a standard layout and can still be codesigned. Runtime lookup is handled by
+# AppResourceBundle.
 RESOURCE_BUNDLE=""
 for candidate in \
     .build/arm64-apple-macosx/release/SuperIsland_SuperIsland.bundle \

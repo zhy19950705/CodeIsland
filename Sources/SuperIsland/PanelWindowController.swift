@@ -2,6 +2,11 @@ import AppKit
 import SwiftUI
 import SuperIslandCore
 
+/// Direct clicks on the island should focus only the panel window, not every app window.
+enum PanelDirectClickActivationPolicy: Equatable {
+    case panelOnly
+}
+
 /// Non-activating panel that can temporarily opt into focus only for explicit user interactions.
 final class KeyablePanel: NSPanel {
     /// Keep the panel passive by default so background completion cards do not
@@ -10,6 +15,11 @@ final class KeyablePanel: NSPanel {
 
     override var canBecomeKey: Bool { allowsInteractiveActivation }
     override var canBecomeMain: Bool { allowsInteractiveActivation }
+
+    /// Bringing every window forward makes panel clicks unexpectedly surface the settings window.
+    nonisolated static func directClickActivationPolicy() -> PanelDirectClickActivationPolicy {
+        .panelOnly
+    }
 
     override func sendEvent(_ event: NSEvent) {
         switch event.type {
@@ -22,10 +32,14 @@ final class KeyablePanel: NSPanel {
             }
             // A direct click is an explicit user intent to interact with SuperIsland,
             // so it is safe to promote the panel to an active key window here.
+            // Only the panel should come forward; otherwise an existing settings
+            // window can steal focus and look like the click "opened settings".
             allowsInteractiveActivation = true
             NSApp.activate(ignoringOtherApps: true)
-            NSRunningApplication.current.activate(options: [.activateAllWindows])
-            makeKeyAndOrderFront(nil)
+            switch Self.directClickActivationPolicy() {
+            case .panelOnly:
+                makeKeyAndOrderFront(nil)
+            }
         default:
             break
         }
@@ -82,12 +96,6 @@ final class NotchHostingView<Content: View>: NSHostingView<Content> {
     var isExpanded: () -> Bool = { false }
     var collapsedInteractiveHeight: () -> CGFloat = { 44 }
 
-    private var applyingDeferred = false
-    private var pendingNeedsUpdateConstraints: Bool?
-    private var pendingNeedsLayout: Bool?
-    private var hasScheduledNeedsUpdateConstraints = false
-    private var hasScheduledNeedsLayout = false
-
     override func mouseDown(with event: NSEvent) {
         // Only promote the panel when activation has already been allowed by an
         // explicit reveal or a direct click handled at the NSPanel level.
@@ -105,66 +113,6 @@ final class NotchHostingView<Content: View>: NSHostingView<Content> {
         }
         let interactiveMinY = bounds.maxY - collapsedInteractiveHeight()
         return point.y >= interactiveMinY ? self : nil
-    }
-
-    override var needsUpdateConstraints: Bool {
-        get { super.needsUpdateConstraints }
-        set {
-            if applyingDeferred {
-                super.needsUpdateConstraints = newValue
-                return
-            }
-            pendingNeedsUpdateConstraints = newValue
-            guard !hasScheduledNeedsUpdateConstraints else { return }
-            hasScheduledNeedsUpdateConstraints = true
-            DispatchQueue.main.async { [weak self] in
-                self?.flushDeferredNeedsUpdateConstraints()
-            }
-        }
-    }
-
-    private func flushDeferredNeedsUpdateConstraints() {
-        hasScheduledNeedsUpdateConstraints = false
-        guard let pendingNeedsUpdateConstraints else { return }
-        self.pendingNeedsUpdateConstraints = nil
-        guard super.needsUpdateConstraints != pendingNeedsUpdateConstraints else { return }
-        applySuperNeedsUpdateConstraints(pendingNeedsUpdateConstraints)
-    }
-
-    private func applySuperNeedsUpdateConstraints(_ value: Bool) {
-        applyingDeferred = true
-        super.needsUpdateConstraints = value
-        applyingDeferred = false
-    }
-
-    override var needsLayout: Bool {
-        get { super.needsLayout }
-        set {
-            if applyingDeferred {
-                super.needsLayout = newValue
-                return
-            }
-            pendingNeedsLayout = newValue
-            guard !hasScheduledNeedsLayout else { return }
-            hasScheduledNeedsLayout = true
-            DispatchQueue.main.async { [weak self] in
-                self?.flushDeferredNeedsLayout()
-            }
-        }
-    }
-
-    private func flushDeferredNeedsLayout() {
-        hasScheduledNeedsLayout = false
-        guard let pendingNeedsLayout else { return }
-        self.pendingNeedsLayout = nil
-        guard super.needsLayout != pendingNeedsLayout else { return }
-        applySuperNeedsLayout(pendingNeedsLayout)
-    }
-
-    private func applySuperNeedsLayout(_ value: Bool) {
-        applyingDeferred = true
-        super.needsLayout = value
-        applyingDeferred = false
     }
 }
 
@@ -236,7 +184,8 @@ class PanelWindowController: NSObject, NSWindowDelegate {
     var hostingView: NotchHostingView<NotchPanelView>?
     let appState: AppState
     let environmentMonitor = PanelEnvironmentMonitor()
-    var globalClickMonitor: Any?
+    /// Pointer handling lives outside SwiftUI hover so panel rebuilds do not break interaction state.
+    let pointerInteractionController = PanelPointerInteractionController()
     var notchCustomizationObserver: NSObjectProtocol?
     var notchEditingObserver: NSObjectProtocol?
     var liveEditPanel: NotchLiveEditPanel?
@@ -249,20 +198,35 @@ class PanelWindowController: NSObject, NSWindowDelegate {
     var isDraggingPanel = false
     var localDragMonitor: Any?
     var isFullscreenEdgeRevealActive = false
+    var surfaceChangeObserver: NSObjectProtocol?
 
     init(appState: AppState) {
         self.appState = appState
         super.init()
+        pointerInteractionController.handleEvent = { [weak self] event in
+            self?.handlePointerEvent(event)
+        }
+        surfaceChangeObserver = NotificationCenter.default.addObserver(
+            forName: .superIslandSurfaceDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.syncWindowInteractionBehavior()
+            }
+        }
         startNotchCustomizationObserversIfNeeded()
     }
 
     func showPanel() {
         if let panel {
+            pointerInteractionController.startObserving()
             syncAutomaticActivationMode()
             syncWindowInteractionBehavior()
             updatePosition()
             updateVisibility()
             panel.orderFrontRegardless()
+            reconcilePointerHoverState()
             return
         }
 
@@ -287,7 +251,7 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.sharingType = .readOnly
-        panel.contentView = contentView
+        installHostingView(contentView, in: panel)
         panel.delegate = self
 
         self.panel = panel
@@ -300,6 +264,7 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         syncWindowInteractionBehavior()
         updatePosition()
         panel.orderFrontRegardless()
+        reconcilePointerHoverState()
 
         environmentMonitor.startObserving(
             appState: appState,
@@ -336,30 +301,8 @@ class PanelWindowController: NSObject, NSWindowDelegate {
                 }
             )
         )
-
-        // Replace the monitor defensively so panel recreation cannot stack duplicate global listeners.
-        let newMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            Task { @MainActor in
-                guard let self = self, self.appState.surface.isExpanded else { return }
-                switch self.appState.surface {
-                case .approvalCard, .questionCard:
-                    return
-                default:
-                    break
-                }
-                if let panelFrame = self.panel?.frame,
-                   panelFrame.contains(NSEvent.mouseLocation) {
-                    return
-                }
-                self.appState.cancelCompletionQueue()
-                self.appState.collapseIsland(reason: .click)
-            }
-        }
-        Self.replaceMonitor(
-            currentMonitor: &globalClickMonitor,
-            newMonitor: newMonitor,
-            removeMonitor: NSEvent.removeMonitor
-        )
+        pointerInteractionController.startObserving()
+        reconcilePointerHoverState()
     }
 
     func revealPanel() {
@@ -383,8 +326,10 @@ class PanelWindowController: NSObject, NSWindowDelegate {
 
     deinit {
         let environmentMonitor = self.environmentMonitor
+        let pointerInteractionController = self.pointerInteractionController
         Task { @MainActor in
             environmentMonitor.stopObserving()
+            pointerInteractionController.stopObserving()
         }
         if let notchCustomizationObserver {
             NotificationCenter.default.removeObserver(notchCustomizationObserver)
@@ -392,7 +337,9 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         if let notchEditingObserver {
             NotificationCenter.default.removeObserver(notchEditingObserver)
         }
-        Self.replaceMonitor(currentMonitor: &globalClickMonitor, newMonitor: nil, removeMonitor: NSEvent.removeMonitor)
+        if let surfaceChangeObserver {
+            NotificationCenter.default.removeObserver(surfaceChangeObserver)
+        }
         Self.replaceMonitor(currentMonitor: &localDragMonitor, newMonitor: nil, removeMonitor: NSEvent.removeMonitor)
     }
 }

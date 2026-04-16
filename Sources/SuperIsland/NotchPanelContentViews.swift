@@ -52,14 +52,42 @@ struct NotchPrimaryBarView: View {
 
 struct NotchExpandedContentView: View {
     var appState: AppState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Line()
-            .stroke(.white.opacity(0.15), style: StrokeStyle(lineWidth: 0.5, dash: [4, 3]))
-            .frame(height: 0.5)
-            .padding(.horizontal, 12)
+        VStack(spacing: 0) {
+            Line()
+                .stroke(.white.opacity(0.15), style: StrokeStyle(lineWidth: 0.5, dash: [4, 3]))
+                .frame(height: 0.5)
+                .padding(.horizontal, 12)
 
+            ZStack(alignment: .top) {
+                surfaceContent
+                    .id(appState.surface.transitionIdentity)
+                    .transition(reduceMotion ? .opacity : Self.transition(for: appState.surface))
+            }
+            .frame(maxWidth: .infinity, alignment: .top)
+        }
+        .animation(reduceMotion ? nil : NotchAnimation.surfaceSwap, value: appState.presentationState.content)
+    }
+
+    /// Keep the switch body separate from the transition container so each surface
+    /// can own a stable identity while the wrapper controls the cross-surface motion.
+    @ViewBuilder
+    private var surfaceContent: some View {
         switch appState.surface {
+        case .sessionDetail(let sessionId):
+            if let session = appState.sessions[sessionId] {
+                SessionDetailView(appState: appState, sessionId: sessionId, session: session)
+            } else {
+                SessionListView(appState: appState, onlySessionId: nil)
+            }
+        case .completionCard(let sessionId):
+            if let session = appState.sessions[sessionId] {
+                SessionDetailView(appState: appState, sessionId: sessionId, session: session)
+            } else {
+                SessionListView(appState: appState, onlySessionId: nil)
+            }
         case .approvalCard(let sessionId):
             if let pending = appState.pendingPermission {
                 ApprovalBar(
@@ -73,7 +101,6 @@ struct NotchExpandedContentView: View {
                     onDeny: { appState.denyPermission() },
                     onJump: { appState.jumpToSession(sessionId) }
                 )
-                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
             } else if let preview = appState.previewApprovalPayload {
                 ApprovalBar(
                     tool: preview.tool,
@@ -84,7 +111,6 @@ struct NotchExpandedContentView: View {
                     onAlwaysAllow: {},
                     onDeny: {}
                 )
-                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
             }
         case .questionCard(let sessionId):
             let session = appState.sessions[sessionId]
@@ -102,7 +128,6 @@ struct NotchExpandedContentView: View {
                     onSkip: { appState.skipQuestion() },
                     onJump: { appState.jumpToSession(sessionId) }
                 )
-                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
             } else if let preview = appState.previewQuestionPayload {
                 QuestionBar(
                     question: preview.question,
@@ -115,16 +140,40 @@ struct NotchExpandedContentView: View {
                     onAnswer: { _ in },
                     onSkip: {}
                 )
-                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
             }
-        case .completionCard:
-            SessionListView(appState: appState, onlySessionId: appState.justCompletedSessionId)
-                .transition(.opacity.combined(with: .move(edge: .top)))
         case .sessionList:
             SessionListView(appState: appState, onlySessionId: nil)
-                .transition(.opacity.combined(with: .move(edge: .top)))
         case .collapsed:
             EmptyView()
+        }
+    }
+
+    /// Motion stays lightweight and profile-driven so the content area feels more
+    /// intentional without forcing heavyweight matched-geometry machinery.
+    private static func transition(for surface: IslandSurface) -> AnyTransition {
+        switch surface.motionProfile {
+        case .list:
+            return .asymmetric(
+                insertion: .opacity.combined(with: .move(edge: .top)),
+                removal: .opacity.combined(with: .scale(scale: 0.985, anchor: .top))
+            )
+        case .detail:
+            return .asymmetric(
+                insertion: .opacity
+                    .combined(with: .move(edge: .trailing))
+                    .combined(with: .scale(scale: 0.985, anchor: .topTrailing)),
+                removal: .opacity
+                    .combined(with: .move(edge: .leading))
+                    .combined(with: .scale(scale: 0.985, anchor: .topLeading))
+            )
+        case .blockingCard:
+            return .opacity.combined(with: .scale(scale: 0.97, anchor: .top))
+        case .completion:
+            return .opacity
+                .combined(with: .move(edge: .top))
+                .combined(with: .scale(scale: 0.985, anchor: .top))
+        case .collapsed:
+            return .opacity
         }
     }
 }

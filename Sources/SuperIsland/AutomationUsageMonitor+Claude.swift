@@ -90,12 +90,14 @@ extension UsageMonitorCommand {
                     label: "5h",
                     percentage: primaryUsed,
                     detail: AutomationUsageMonitorSupport.claudeWindowDetail(resetAt: quota.primary.resetAt),
+                    refreshAtUnix: quota.primary.resetAt,
                     tintHex: AutomationUsageMonitorSupport.tintHex(forUsedPercentage: primaryUsed)
                 ),
                 secondary: UsageWindowStat(
                     label: "7d",
                     percentage: secondaryUsed,
                     detail: AutomationUsageMonitorSupport.claudeWindowDetail(resetAt: quota.secondary.resetAt),
+                    refreshAtUnix: quota.secondary.resetAt,
                     tintHex: AutomationUsageMonitorSupport.tintHex(forUsedPercentage: secondaryUsed)
                 ),
                 updatedAtUnix: now,

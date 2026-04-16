@@ -62,4 +62,34 @@ final class SessionPreviewMessagesTests: XCTestCase {
         2. 本地缓存
         """)
     }
+
+    func testFixedListPreviewLinesExposeSingleUserAndAssistantLine() {
+        var session = SessionSnapshot()
+        session.lastUserPrompt = "最新问题"
+        session.lastAssistantMessage = "最新回答"
+        session.recentMessages = [
+            ChatMessage(isUser: true, text: "旧问题"),
+            ChatMessage(isUser: false, text: "旧回答"),
+            ChatMessage(isUser: true, text: "最新问题"),
+            ChatMessage(isUser: false, text: "最新回答"),
+        ]
+
+        let lines = session.fixedListPreviewLines
+
+        XCTAssertEqual(lines.userText, "最新问题")
+        XCTAssertEqual(lines.assistantText, "最新回答")
+    }
+
+    func testFixedListPreviewLinesPreferRunningStatusAsAssistantLine() {
+        var session = SessionSnapshot()
+        session.status = .processing
+        session.lastUserPrompt = "继续"
+        session.currentTool = "git status --short"
+        session.lastAssistantMessage = "旧回答"
+
+        let lines = session.fixedListPreviewLines
+
+        XCTAssertEqual(lines.userText, "继续")
+        XCTAssertEqual(lines.assistantText, "git status --short")
+    }
 }

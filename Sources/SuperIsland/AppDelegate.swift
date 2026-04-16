@@ -6,6 +6,8 @@ import os.log
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
     private static let log = Logger(subsystem: "com.superisland", category: "AppDelegate")
+    // Keep first-launch state local to the app delegate so the onboarding trigger stays app-lifetime scoped.
+    private var firstLaunchExperience = FirstLaunchExperience()
 
     var panelController: PanelWindowController? { displayModeCoordinator?.panelController }
     private var hookServer: HookServer?
@@ -73,7 +75,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 300_000_000)
                 if appState.surface == .collapsed {
-                    appState.openSessionList(reason: .boot, animation: NotchAnimation.pop)
+                    // Preview launch should use the same panel entry policy as runtime interactions.
+                    appState.panelCoordinator.openSessionList(reason: .boot, animation: NotchAnimation.pop)
                 }
             }
             return
@@ -89,6 +92,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         SoundManager.shared.playBoot()
         setupGlobalShortcut()
         observeSettingsChanges()
+        presentFirstLaunchExperienceIfNeeded()
 
     }
 
@@ -145,6 +149,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func presentFirstLaunchExperienceIfNeeded() {
+        guard firstLaunchExperience.consumePendingPresentation() else { return }
+
+        // Delay slightly so launch-time setup finishes before we bring the settings window forward.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            SettingsWindowController.shared.show()
+        }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         hookRecoveryTimer?.invalidate()
         teardownGlobalShortcut()
@@ -191,7 +205,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 displayModeCoordinator?.revealPrimaryInterface()
             } else {
                 displayModeCoordinator?.revealPrimaryInterface()
-                appState.openSessionList(reason: .deeplink)
+                // Deeplink fallback should still route through the coordinator so panel state stays consistent.
+                appState.panelCoordinator.openSessionList(reason: .deeplink)
             }
         default:
             NSApp.activate(ignoringOtherApps: true)

@@ -3,37 +3,13 @@ import XCTest
 import SuperIslandCore
 
 final class SessionListViewTests: XCTestCase {
-    func testNeedsScrollWhenHeadersAndComposerPushContentPastThreshold() {
-        XCTAssertTrue(
-            SessionListView.needsScroll(
-                totalSessionCount: 5,
-                groupHeaderCount: 2,
-                hasComposer: true,
-                maxVisibleSessions: 5,
-                onlySessionId: nil
-            )
-        )
-    }
-
-    func testNeedsScrollStaysFalseForSmallerGroupedLists() {
+    func testUsesCompactRowStaysFalseForCompletionOnlyView() {
         XCTAssertFalse(
-            SessionListView.needsScroll(
-                totalSessionCount: 3,
-                groupHeaderCount: 1,
-                hasComposer: false,
-                maxVisibleSessions: 5,
-                onlySessionId: nil
-            )
-        )
-    }
-
-    func testNeedsScrollStaysFalseForCompletionOnlyView() {
-        XCTAssertFalse(
-            SessionListView.needsScroll(
-                totalSessionCount: 10,
-                groupHeaderCount: 3,
-                hasComposer: true,
-                maxVisibleSessions: 5,
+            SessionListView.usesCompactRow(
+                status: .idle,
+                needsCompletionReview: false,
+                sessionId: "done",
+                activeSessionId: nil,
                 onlySessionId: "done"
             )
         )
@@ -67,6 +43,18 @@ final class SessionListViewTests: XCTestCase {
                 status: .idle,
                 needsCompletionReview: false,
                 sessionId: "idle",
+                activeSessionId: "selected",
+                onlySessionId: nil
+            )
+        )
+    }
+
+    func testUsesCompactRowKeepsSelectedSessionExpanded() {
+        XCTAssertFalse(
+            SessionListView.usesCompactRow(
+                status: .idle,
+                needsCompletionReview: false,
+                sessionId: "selected",
                 activeSessionId: "selected",
                 onlySessionId: nil
             )

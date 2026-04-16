@@ -30,6 +30,17 @@ struct SessionListView: View {
     @AppStorage(SettingsKey.maxVisibleSessions) private var maxVisibleSessions = SettingsDefaults.maxVisibleSessions
     @State private var codexInput = ""
 
+    /// Row chrome, hover emphasis, and the outer notch shell all need a little
+    /// extra breathing room so the first and last rows do not look cropped.
+    private let verticalContentInset: CGFloat = 12
+
+    private var showsBottomUsageStrip: Bool {
+        guard onlySessionId == nil else { return false }
+        return appState.usageSnapshot.providers.contains {
+            ($0.source == .claude || $0.source == .codex) && $0.hasQuotaMetrics
+        }
+    }
+
     private var activeCodexSessionId: String? {
         guard let sessionId = appState.activeSessionId,
               let session = appState.sessions[sessionId],
@@ -48,10 +59,8 @@ struct SessionListView: View {
     ) -> Bool {
         guard onlySessionId == nil else { return false }
 
-        // Menu bar popover has a fixed outer height and its own scroller —
-        // always let the list scroll inside it so overflow never gets
-        // silently clipped when cards, headers, or the composer combine to
-        // exceed the popover's content area.
+        // Menu bar popovers always own a scroll container so overflow never gets
+        // silently clipped when cards and composer controls stack up.
         if presentation == .menuBar {
             return totalSessionCount > 0
         }
@@ -82,6 +91,12 @@ struct SessionListView: View {
         }
     }
 
+    /// The notch presentation should keep a stable scroll viewport so repeated
+    /// collapse/reopen cycles do not re-measure the list shorter and shorter.
+    nonisolated static func notchScrollHeight(maxVisibleSessions: Int) -> CGFloat {
+        CGFloat(max(2, maxVisibleSessions)) * 90
+    }
+
     var body: some View {
         let snapshot = appState.sessionListPresentation(
             groupingMode: groupingMode,
@@ -95,31 +110,42 @@ struct SessionListView: View {
             onlySessionId: onlySessionId,
             presentation: presentation
         )
-        let notchScrollMaxHeight = CGFloat(maxVisibleSessions) * 90
+        let notchScrollMaxHeight = Self.notchScrollHeight(maxVisibleSessions: maxVisibleSessions)
 
-        Group {
-            if presentation == .menuBar {
-                ScrollView(.vertical) {
-                    sessionRows(lazy: true, groups: snapshot.groups)
-                }
-                .scrollIndicators(.automatic)
-            } else if needsScroll {
-                AutoHeightSessionScrollView(maxHeight: notchScrollMaxHeight) {
+        VStack(spacing: 0) {
+            Group {
+                if presentation == .menuBar {
+                    ScrollView(.vertical) {
+                        sessionRows(lazy: true, groups: snapshot.groups)
+                    }
+                    .scrollIndicators(.automatic)
+                } else if needsScroll {
+                    AutoHeightSessionScrollView(maxHeight: notchScrollMaxHeight) {
+                        sessionRows(lazy: false, groups: snapshot.groups)
+                    } scrollContent: {
+                        sessionRows(lazy: true, groups: snapshot.groups)
+                    }
+                    .clipShape(scrollClipShape)
+                } else {
                     sessionRows(lazy: false, groups: snapshot.groups)
-                } scrollContent: {
-                    sessionRows(lazy: true, groups: snapshot.groups)
                 }
-                .clipShape(
-                    UnevenRoundedRectangle(
-                        topLeadingRadius: 0, bottomLeadingRadius: 20,
-                        bottomTrailingRadius: 20, topTrailingRadius: 0,
-                        style: .continuous
-                    )
-                )
-            } else {
-                sessionRows(lazy: false, groups: snapshot.groups)
+            }
+
+            if showsBottomUsageStrip {
+                SessionListUsageStrip(snapshot: appState.usageSnapshot)
             }
         }
+    }
+
+    private var scrollClipShape: UnevenRoundedRectangle {
+        // Keeping the clip shape stable avoids layout re-measurement when the list crosses the old scroll threshold.
+        UnevenRoundedRectangle(
+            topLeadingRadius: 0,
+            bottomLeadingRadius: 20,
+            bottomTrailingRadius: 20,
+            topTrailingRadius: 0,
+            style: .continuous
+        )
     }
 
     @ViewBuilder
@@ -128,12 +154,14 @@ struct SessionListView: View {
             LazyVStack(spacing: 6) {
                 sessionRowSections(groups: groups)
             }
-            .padding(.vertical, 4)
+            .padding(.top, verticalContentInset)
+            .padding(.bottom, verticalContentInset)
         } else {
             VStack(spacing: 6) {
                 sessionRowSections(groups: groups)
             }
-            .padding(.vertical, 4)
+            .padding(.top, verticalContentInset)
+            .padding(.bottom, verticalContentInset)
         }
     }
 
@@ -188,8 +216,7 @@ struct SessionListView: View {
         if onlySessionId != nil && appState.sessions.count > 1 {
             SessionsExpandLink(count: appState.sessions.count) {
                 withAnimation(NotchAnimation.open) {
-                    appState.surface = .sessionList
-                    appState.cancelCompletionQueue()
+                    appState.panelCoordinator.openSessionList(reason: .click)
                 }
             }
         }
@@ -207,6 +234,7 @@ struct SessionListView: View {
                 }
             )
         }
+
     }
 
     private func rowStyle(for sessionId: String, session: SessionSnapshot) -> SessionListRowStyle {

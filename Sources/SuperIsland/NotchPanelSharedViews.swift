@@ -198,7 +198,7 @@ struct TerminalJumpAccessory: View {
     let session: SessionSnapshot
     let isHovered: Bool
 
-    private let green = Color(red: 0.3, green: 0.85, blue: 0.4)
+    private let accent = Color(red: 0.3, green: 0.85, blue: 0.4)
 
     private static let sourceBundleIds: [String: String] = [
         "cursor": "com.todesktop.230313mzl4w4u92",
@@ -222,28 +222,43 @@ struct TerminalJumpAccessory: View {
     }
 
     var body: some View {
-        HStack(spacing: 4) {
-            if let icon = termIcon {
-                Image(nsImage: icon)
-                    .resizable()
-                    .frame(width: 13, height: 13)
+        HStack(spacing: 6) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(Color.white.opacity(isHovered ? 0.08 : 0.05))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .strokeBorder(Color.white.opacity(isHovered ? 0.08 : 0.05), lineWidth: 1)
+                    )
+                if let icon = termIcon {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .frame(width: 12, height: 12)
+                }
             }
-            if let term = session.terminalName {
-                Text(term)
-                    .font(.system(size: 9.5, weight: .medium, design: .monospaced))
-                    .foregroundStyle(green)
-            }
-            Image(systemName: "arrow.right")
-                .font(.system(size: 7, weight: .bold))
-                .foregroundStyle(green.opacity(isHovered ? 1.0 : 0.5))
-                .offset(x: isHovered ? 2 : 0)
+            .frame(width: 18, height: 18)
+
+            Text(session.terminalName ?? "open")
+                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                .foregroundStyle(accent.opacity(isHovered ? 0.96 : 0.8))
+                .lineLimit(1)
+
+            Image(systemName: "arrow.up.forward")
+                .font(.system(size: 7.5, weight: .bold))
+                .foregroundStyle(.white.opacity(isHovered ? 0.7 : 0.34))
+                .offset(x: isHovered ? 1 : 0)
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 3)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
         .background(
-            RoundedRectangle(cornerRadius: 5)
-                .fill(green.opacity(isHovered ? 0.18 : 0.08))
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color(red: 0.09, green: 0.13, blue: 0.11).opacity(isHovered ? 0.96 : 0.78))
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(accent.opacity(isHovered ? 0.24 : 0.12), lineWidth: 1)
+        )
+        .fixedSize(horizontal: true, vertical: false)
     }
 }
 
@@ -259,6 +274,7 @@ struct SessionJumpButton: View {
             TerminalJumpAccessory(session: session, isHovered: hovering)
         }
         .buttonStyle(.plain)
+        .fixedSize(horizontal: true, vertical: false)
         .onHover { isHovered in
             withAnimation(NotchAnimation.micro) { hovering = isHovered }
         }
@@ -307,13 +323,17 @@ struct SessionTag: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 9.5, weight: .medium, design: .monospaced))
-            .foregroundStyle(color)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
+            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+            .foregroundStyle(color.opacity(0.96))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
             .background(
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(color.opacity(0.12))
+                Capsule(style: .continuous)
+                    .fill(color.opacity(0.11))
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .strokeBorder(color.opacity(0.14), lineWidth: 1)
             )
     }
 }

@@ -96,6 +96,8 @@ enum BlockingInteractionCoordinator {
             return BlockingPresentationState(activeSessionId: nil, surface: .collapsed)
         case .collapsed, .sessionList, .completionCard:
             return nil
+        case .sessionDetail(let sessionId):
+            return BlockingPresentationState(activeSessionId: sessionId, surface: currentSurface)
         }
     }
 

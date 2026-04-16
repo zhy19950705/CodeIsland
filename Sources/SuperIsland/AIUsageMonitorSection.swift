@@ -3,7 +3,7 @@ import SuperIslandCore
 
 // AIUsageMonitorSection renders the usage monitor controls and provider cards while the page owns the async actions.
 struct AIUsageMonitorSection: View {
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
     let usageSnapshot: UsageSnapshot
     let usageMonitorSnapshot: UsageMonitorLaunchAgentSnapshot
     let statusMessage: String
@@ -87,7 +87,7 @@ struct AIUsageMonitorSection: View {
                     .font(.system(size: 13, weight: .semibold))
                 Spacer()
                 if let provider, let updatedAtUnix = provider.updatedAtUnix {
-                    Text(RelativeDateTimeFormatter().localizedString(for: Date(timeIntervalSince1970: updatedAtUnix), relativeTo: Date()))
+                    Text(relativeTime(updatedAtUnix))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -143,5 +143,12 @@ struct AIUsageMonitorSection: View {
         case .cursor:
             l10n["usage_cursor_unavailable"]
         }
+    }
+
+    // Pin relative time copy to Chinese so the UI stays consistent regardless of the host macOS language.
+    private func relativeTime(_ unix: TimeInterval) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = AppLocale.chinese
+        return formatter.localizedString(for: Date(timeIntervalSince1970: unix), relativeTo: Date())
     }
 }

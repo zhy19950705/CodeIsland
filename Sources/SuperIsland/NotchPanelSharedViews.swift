@@ -17,21 +17,21 @@ struct HoverApprovalActions: View {
 
             HStack(spacing: 6) {
                 PixelButton(
-                    label: L10n.shared["deny"],
+                    label: AppText.shared["deny"],
                     fg: .white.opacity(0.95),
                     bg: Color(red: 0.45, green: 0.12, blue: 0.12),
                     border: Color(red: 0.7, green: 0.25, blue: 0.25),
                     action: onDeny
                 )
                 PixelButton(
-                    label: L10n.shared["allow_once"],
+                    label: AppText.shared["allow_once"],
                     fg: .white.opacity(0.95),
                     bg: Color(red: 0.16, green: 0.38, blue: 0.18),
                     border: Color(red: 0.28, green: 0.62, blue: 0.32),
                     action: onAllow
                 )
                 PixelButton(
-                    label: L10n.shared["always"],
+                    label: AppText.shared["always"],
                     fg: .white.opacity(0.95),
                     bg: Color(red: 0.14, green: 0.28, blue: 0.52),
                     border: Color(red: 0.28, green: 0.48, blue: 0.82),
@@ -92,7 +92,7 @@ struct HoverQuestionActions: View {
                     Text(">")
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color(red: 0.3, green: 0.85, blue: 0.4))
-                    TextField(L10n.shared["type_answer"], text: $textInput)
+                    TextField(AppText.shared["type_answer"], text: $textInput)
                         .textFieldStyle(.plain)
                         .font(.system(size: 10.5, design: .monospaced))
                         .foregroundStyle(.white)
@@ -115,7 +115,7 @@ struct HoverQuestionActions: View {
 
             HStack(spacing: 6) {
                 PixelButton(
-                    label: L10n.shared["skip"],
+                    label: AppText.shared["skip"],
                     fg: .white.opacity(0.6),
                     bg: Color.white.opacity(0.06),
                     border: Color.white.opacity(0.12),
@@ -123,7 +123,7 @@ struct HoverQuestionActions: View {
                 )
                 if request.question.options == nil || request.question.options?.isEmpty == true {
                     PixelButton(
-                        label: L10n.shared["submit"],
+                        label: AppText.shared["submit"],
                         fg: .white.opacity(0.95),
                         bg: Color(red: 0.16, green: 0.38, blue: 0.18),
                         border: Color(red: 0.28, green: 0.62, blue: 0.32),

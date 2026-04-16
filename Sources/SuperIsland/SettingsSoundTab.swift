@@ -5,7 +5,7 @@ import SuperIslandCore
 // MARK: - Sound Page
 
 struct SoundPage: View {
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
     @AppStorage(SettingsKey.soundEnabled) private var soundEnabled = SettingsDefaults.soundEnabled
     @AppStorage(SettingsKey.soundVolume) private var soundVolume = SettingsDefaults.soundVolume
     @AppStorage(SettingsKey.soundSessionStart) private var soundSessionStart = SettingsDefaults.soundSessionStart
@@ -260,12 +260,12 @@ private struct RegistrySoundPackRow: View {
 
     private var actionTitle: String {
         if isInstalling {
-            return L10n.shared["sound_pack_installing"]
+            return AppText.shared["sound_pack_installing"]
         }
         if isInstalled {
-            return isSelected ? L10n.shared["sound_pack_in_use"] : L10n.shared["sound_pack_use"]
+            return isSelected ? AppText.shared["sound_pack_in_use"] : AppText.shared["sound_pack_use"]
         }
-        return L10n.shared["sound_pack_install"]
+        return AppText.shared["sound_pack_install"]
     }
 
     var body: some View {

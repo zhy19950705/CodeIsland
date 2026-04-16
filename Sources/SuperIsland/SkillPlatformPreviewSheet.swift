@@ -22,7 +22,7 @@ struct SkillPreviewSheet: View {
             }
 
             if let sourceURL = document.sourceURL {
-                Button("Open Source") {
+                Button(AppText.shared["open_source"]) {
                     NSWorkspace.shared.open(sourceURL)
                 }
                 .buttonStyle(.bordered)

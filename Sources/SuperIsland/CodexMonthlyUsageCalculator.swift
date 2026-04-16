@@ -153,7 +153,7 @@ enum CodexMonthlyUsageCalculator {
         let calendar = Calendar.current
         let startDate = calendar.date(byAdding: .day, value: -29, to: calendar.startOfDay(for: date)) ?? date
         let formatter = DateFormatter()
-        formatter.locale = Locale.current
+        formatter.locale = AppLocale.chinese
         formatter.dateStyle = .short
         formatter.timeStyle = .none
         return "\(formatter.string(from: startDate)) - \(formatter.string(from: date))"
@@ -164,7 +164,7 @@ enum CodexMonthlyUsageCalculator {
         endDateExclusive: Date
     ) -> String {
         let formatter = DateFormatter()
-        formatter.locale = Locale.current
+        formatter.locale = AppLocale.chinese
         formatter.dateStyle = .short
         formatter.timeStyle = .none
         let inclusiveEnd = endDateExclusive.addingTimeInterval(-1)

@@ -31,7 +31,7 @@ struct BashOutputResultContent: View {
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.46))
                 if let exitCode = result.exitCode {
-                    Text("exit \(exitCode)")
+                    Text("退出码 \(exitCode)")
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(exitCode == 0 ? .green.opacity(0.82) : .red.opacity(0.82))
                 }
@@ -57,7 +57,7 @@ struct KillShellResultContent: View {
             Image(systemName: "xmark.circle")
                 .font(.system(size: 11))
                 .foregroundStyle(.red.opacity(0.78))
-            Text(result.message.isEmpty ? "Shell \(result.shellId) stopped" : result.message)
+            Text(result.message.isEmpty ? "Shell \(result.shellId) 已停止" : result.message)
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.6))
         }
@@ -126,7 +126,7 @@ struct GenericResultContent: View {
         if let rawContent = result.rawContent, !rawContent.isEmpty {
             GenericTextContent(text: rawContent)
         } else {
-            EmptyToolResultLabel("Completed")
+            EmptyToolResultLabel("已完成")
         }
     }
 }

@@ -156,7 +156,7 @@ struct CodePreview: View {
                     .foregroundStyle(.white.opacity(0.76))
             }
             if lines.count > maxLines {
-                Text("+\(lines.count - maxLines) more lines")
+                Text("+\(lines.count - maxLines) 行未显示")
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.34))
                     .padding(.top, 2)
@@ -187,7 +187,7 @@ struct FileListView: View {
                 }
             }
             if files.count > limit {
-                Text("+\(files.count - limit) more")
+                Text("+\(files.count - limit) 个未显示")
                     .font(.system(size: 11))
                     .foregroundStyle(.white.opacity(0.34))
             }

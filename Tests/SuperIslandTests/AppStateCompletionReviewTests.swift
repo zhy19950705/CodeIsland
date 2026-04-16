@@ -119,11 +119,13 @@ final class AppStateCompletionReviewTests: XCTestCase {
         XCTAssertEqual(appState.justCompletedSessionId, "\(AppState.testingCompletionHookPrefix)1")
         XCTAssertEqual(
             appState.completionQueue,
-            [
-                "\(AppState.testingCompletionHookPrefix)2",
-                "\(AppState.testingCompletionHookPrefix)3",
-            ]
+            ["\(AppState.testingCompletionHookPrefix)2", "\(AppState.testingCompletionHookPrefix)3"]
         )
+        XCTAssertEqual(
+            appState.completionSequence,
+            ["\(AppState.testingCompletionHookPrefix)1", "\(AppState.testingCompletionHookPrefix)2", "\(AppState.testingCompletionHookPrefix)3"]
+        )
+        XCTAssertEqual(appState.completionSequenceIndex, 0)
         XCTAssertTrue(appState.needsCompletionReview(sessionId: "\(AppState.testingCompletionHookPrefix)1"))
         XCTAssertTrue(appState.needsCompletionReview(sessionId: "\(AppState.testingCompletionHookPrefix)2"))
         XCTAssertTrue(appState.needsCompletionReview(sessionId: "\(AppState.testingCompletionHookPrefix)3"))
@@ -144,11 +146,41 @@ final class AppStateCompletionReviewTests: XCTestCase {
         try? await Task.sleep(for: .milliseconds(30))
         XCTAssertEqual(
             appState.completionQueue,
-            [
-                "\(AppState.testingCompletionHookPrefix)2",
-                "\(AppState.testingCompletionHookPrefix)3",
-            ]
+            ["\(AppState.testingCompletionHookPrefix)2", "\(AppState.testingCompletionHookPrefix)3"]
         )
+        XCTAssertEqual(
+            appState.completionSequence,
+            ["\(AppState.testingCompletionHookPrefix)1", "\(AppState.testingCompletionHookPrefix)2", "\(AppState.testingCompletionHookPrefix)3"]
+        )
+    }
+
+    func testShowNextCompletionOrCollapseAdvancesCompletionProgress() {
+        let appState = AppState()
+        defer { appState.teardown() }
+
+        appState.triggerTestingCompletionHook(mode: .simultaneous)
+        appState.showNextCompletionOrCollapse()
+
+        XCTAssertEqual(appState.justCompletedSessionId, "\(AppState.testingCompletionHookPrefix)2")
+        XCTAssertEqual(appState.completionQueue, ["\(AppState.testingCompletionHookPrefix)3"])
+        XCTAssertEqual(appState.completionProgress(for: "\(AppState.testingCompletionHookPrefix)2")?.current, 2)
+        XCTAssertEqual(appState.completionProgress(for: "\(AppState.testingCompletionHookPrefix)2")?.total, 3)
+        XCTAssertEqual(appState.completionSequenceIndex, 1)
+    }
+
+    func testFinalCompletionAdvanceClearsSequenceAndCollapses() {
+        let appState = AppState()
+        defer { appState.teardown() }
+
+        appState.triggerTestingCompletionHook(mode: .simultaneous)
+        appState.showNextCompletionOrCollapse()
+        appState.showNextCompletionOrCollapse()
+        appState.showNextCompletionOrCollapse()
+
+        XCTAssertEqual(appState.surface, .collapsed)
+        XCTAssertTrue(appState.completionQueue.isEmpty)
+        XCTAssertTrue(appState.completionSequence.isEmpty)
+        XCTAssertEqual(appState.completionSequenceIndex, 0)
     }
 
     func testNewActivityClearsPendingCompletionReview() {

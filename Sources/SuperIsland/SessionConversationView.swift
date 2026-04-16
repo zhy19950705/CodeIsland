@@ -53,7 +53,7 @@ struct SessionConversationView: View {
 /// Shared header keeps inline and detail modes visually aligned without duplicating transcript metadata code.
 private struct ConversationSourceHeader: View {
     let sourcePath: String?
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
 
     var body: some View {
         HStack(spacing: 8) {
@@ -80,7 +80,7 @@ private struct SessionConversationBody: View {
     let session: SessionSnapshot
     let state: SessionConversationState
     let style: SessionConversationViewStyle
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
 
     var body: some View {
         if state.isLoading && state.items.isEmpty {

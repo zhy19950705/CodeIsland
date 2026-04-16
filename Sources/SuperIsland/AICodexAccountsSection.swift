@@ -2,7 +2,7 @@ import SwiftUI
 
 // AICodexAccountsSection renders account management controls while the page coordinates the side effects.
 struct AICodexAccountsSection: View {
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
     let codexStatus: CodexAccountManagerStatus?
     let codexAccounts: [CodexManagedAccount]
     let statusMessage: String

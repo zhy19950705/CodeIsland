@@ -25,14 +25,6 @@ extension PanelWindowController {
         }
 
         let insideInteractiveRegion = isPointerInsideInteractiveRegion(mouseLocation: mouseLocation)
-        if insideInteractiveRegion,
-           SettingsManager.shared.smartSuppress,
-           appState.surface == .collapsed,
-           isActiveTerminalForeground() {
-            appState.panelCoordinator.cancelPendingInteraction()
-            return
-        }
-
         appState.panelCoordinator.handleHover(
             inside: insideInteractiveRegion,
             hoverActivationDelay: currentHoverActivationDelay(),

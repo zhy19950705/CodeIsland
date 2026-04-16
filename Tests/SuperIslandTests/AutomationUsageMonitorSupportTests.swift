@@ -40,7 +40,7 @@ final class AutomationUsageMonitorSupportTests: XCTestCase {
             ]
         )
 
-        XCTAssertEqual(summary, "PRO · Credits 42 · Spend OK")
+        XCTAssertEqual(summary, "PRO · Credits 42 · 支出正常")
     }
 
     func testClaudeQuotaSummarySuppressesDefaultOAuthLabelWithoutHistory() {
@@ -55,7 +55,7 @@ final class AutomationUsageMonitorSupportTests: XCTestCase {
                 sourceLabel: "Claude Web API",
                 hasLocalHistory: true
             ),
-            "Claude Web API + local token history"
+            "Claude Web API + 本地令牌历史"
         )
     }
 
@@ -72,13 +72,13 @@ final class AutomationUsageMonitorSupportTests: XCTestCase {
 
         XCTAssertEqual(
             summary,
-            "Cursor Web API via Chrome/Profile 1 · Plan Pro · API 25% · Included $2.50/$10.00 · On-demand $0.50/$3.00 · Team $1.25/$5.00 · dev@example.com"
+            "Cursor Web API（来源：Chrome/Profile 1） · 套餐 Pro · API 25% · 套餐内 $2.50/$10.00 · 按量 $0.50/$3.00 · 团队 $1.25/$5.00 · dev@example.com"
         )
     }
 
     func testFormatTokenCountUsesCompactUnits() {
-        XCTAssertEqual(AutomationUsageMonitorSupport.formatTokenCount(950), "950 tokens")
-        XCTAssertEqual(AutomationUsageMonitorSupport.formatTokenCount(12_500), "12.5K tokens")
-        XCTAssertEqual(AutomationUsageMonitorSupport.formatTokenCount(2_500_000), "2.5M tokens")
+        XCTAssertEqual(AutomationUsageMonitorSupport.formatTokenCount(950), "950 令牌")
+        XCTAssertEqual(AutomationUsageMonitorSupport.formatTokenCount(12_500), "12.5K 令牌")
+        XCTAssertEqual(AutomationUsageMonitorSupport.formatTokenCount(2_500_000), "2.5M 令牌")
     }
 }

@@ -5,7 +5,7 @@ extension UsageWindowStat {
     func badgeTitle(
         now: Date = Date(),
         calendar: Calendar = .current,
-        locale: Locale = .current,
+        locale: Locale = AppLocale.chinese,
         timeZone: TimeZone = .current
     ) -> String {
         guard let refreshAtUnix, refreshAtUnix > 0 else { return label }

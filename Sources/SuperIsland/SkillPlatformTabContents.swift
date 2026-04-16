@@ -4,7 +4,7 @@ import Observation
 
 // SkillPlatformTabContents keeps the page shell small by moving each tab's section composition into its own view.
 struct SkillLibraryTabContent: View {
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
     @Bindable var viewModel: SkillPlatformViewModel
     @Binding var installedSearchQuery: String
     let sharedSkills: [InstalledSkill]
@@ -214,7 +214,7 @@ struct SkillLibraryTabContent: View {
 }
 
 struct SkillAgentsTabContent: View {
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
     @Bindable var viewModel: SkillPlatformViewModel
     let sharedSkillsCount: Int
     let linkedAgentCount: Int
@@ -310,7 +310,7 @@ struct SkillAgentsTabContent: View {
 }
 
 struct SkillMarketplaceTabContent: View {
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
     @Bindable var viewModel: SkillPlatformViewModel
 
     var body: some View {

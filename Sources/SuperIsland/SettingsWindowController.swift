@@ -61,7 +61,7 @@ class SettingsWindowController {
             defer: false
         )
         window.titleVisibility = .visible
-        window.title = L10n.shared["settings_title"]
+        window.title = AppText.shared["settings_title"]
         window.backgroundColor = .windowBackgroundColor
         window.contentViewController = hostingController
         window.contentMinSize = minSize
@@ -126,7 +126,7 @@ class SettingsWindowController {
 }
 
 private struct SettingsWindowUpdateAccessoryView: View {
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
     @ObservedObject private var updateChecker = UpdateChecker.shared
 
     private var isUpdateAvailable: Bool {

@@ -8,7 +8,7 @@ struct DetailConversationTimeline: View {
     let session: SessionSnapshot
     let state: SessionConversationState
 
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
     @State private var isAutoscrollPaused = false
     @State private var newMessageCount = 0
     @State private var lastInitialScrollSessionId: String?

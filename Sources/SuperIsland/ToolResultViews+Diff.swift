@@ -36,7 +36,7 @@ struct EditResultContent: View {
                 )
             }
             if result.userModified {
-                Text("User modified file before patch applied")
+                Text("补丁应用前用户已修改该文件")
                     .font(.system(size: 11))
                     .foregroundStyle(.orange.opacity(0.82))
             }
@@ -54,7 +54,7 @@ struct WriteResultContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 4) {
-                Text(result.type == .create ? "Created" : "Wrote")
+                Text(result.type == .create ? "已创建" : "已写入")
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.5))
                 EditorFileLinkButton(filePath: result.filePath, line: nil, linkContext: linkContext) {

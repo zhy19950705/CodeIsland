@@ -17,9 +17,6 @@ enum DisplayMode: String, CaseIterable {
 }
 
 enum SettingsKey {
-    // Language
-    static let appLanguage = "appLanguage"                 // "system", "en", "zh"
-
     // General - System
     static let launchAtLogin = "launchAtLogin"
     static let displayChoice = "displayChoice"             // Legacy key kept for migration

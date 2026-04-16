@@ -33,7 +33,7 @@ struct NotchControlButtonGroup: View {
     let showsSoundToggle: Bool
     let trailingAction: NotchTrailingAction
 
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
     @AppStorage(SettingsKey.soundEnabled) private var soundEnabled = SettingsDefaults.soundEnabled
 
     var body: some View {

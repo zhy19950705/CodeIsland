@@ -4,7 +4,7 @@ import SuperIslandCore
 
 // UsageProviderRow and its frozen table implementation are shared usage UI components for the AI settings page.
 struct UsageProviderRow: View {
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
     let provider: UsageProviderSnapshot
     var showHeader: Bool = true
     @State private var selectedHistoryPreset: UsageHistoryRangePreset = .recent30Days
@@ -132,6 +132,7 @@ struct UsageProviderRow: View {
 
     private func relativeTime(_ unix: TimeInterval) -> String {
         let formatter = RelativeDateTimeFormatter()
+        formatter.locale = AppLocale.chinese
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: Date(timeIntervalSince1970: unix), relativeTo: Date())
     }
@@ -218,7 +219,7 @@ struct UsageProviderRow: View {
 
     private func shortDate(_ unix: TimeInterval) -> String {
         let formatter = DateFormatter()
-        formatter.locale = Locale.current
+        formatter.locale = AppLocale.chinese
         formatter.dateStyle = .short
         formatter.timeStyle = .none
         return formatter.string(from: Date(timeIntervalSince1970: unix))

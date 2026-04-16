@@ -58,7 +58,7 @@ final class UsageWindowRefreshSupportTests: XCTestCase {
                 resetAfterSeconds: 0,
                 now: now
             ),
-            "1h30m"
+            "1 小时 30 分"
         )
     }
 

@@ -5,7 +5,7 @@ import SuperIslandCore
 // MARK: - About Page
 
 struct AboutPage: View {
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
 
     var body: some View {
         VStack {
@@ -17,7 +17,7 @@ struct AboutPage: View {
                 VStack(spacing: 6) {
                     Text("SuperIsland")
                         .font(.system(size: 26, weight: .bold))
-                    Text("Version \(AppVersion.current)")
+                    Text("版本 \(AppVersion.current)")
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
                 }

@@ -167,7 +167,7 @@ struct CompactSessionRow: View, Equatable {
                                 .foregroundStyle(Color(red: 0.85, green: 0.47, blue: 0.34))
                             TypingIndicator(
                                 fontSize: 10.5,
-                                label: "thinking",
+                                label: "思考中",
                                 color: chrome.secondaryText
                             )
                         }

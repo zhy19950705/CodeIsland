@@ -90,9 +90,9 @@ struct ApprovalBar: View {
             }
 
             HStack(spacing: 6) {
-                PixelButton(label: L10n.shared["deny"], fg: .white.opacity(0.95), bg: Color(red: 0.45, green: 0.12, blue: 0.12), border: Color(red: 0.7, green: 0.25, blue: 0.25), action: onDeny)
-                PixelButton(label: L10n.shared["allow_once"], fg: .white.opacity(0.95), bg: Color(red: 0.16, green: 0.38, blue: 0.18), border: Color(red: 0.28, green: 0.62, blue: 0.32), action: onAllow)
-                PixelButton(label: L10n.shared["always"], fg: .white.opacity(0.95), bg: Color(red: 0.14, green: 0.28, blue: 0.52), border: Color(red: 0.28, green: 0.48, blue: 0.82), action: onAlwaysAllow)
+                PixelButton(label: AppText.shared["deny"], fg: .white.opacity(0.95), bg: Color(red: 0.45, green: 0.12, blue: 0.12), border: Color(red: 0.7, green: 0.25, blue: 0.25), action: onDeny)
+                PixelButton(label: AppText.shared["allow_once"], fg: .white.opacity(0.95), bg: Color(red: 0.16, green: 0.38, blue: 0.18), border: Color(red: 0.28, green: 0.62, blue: 0.32), action: onAllow)
+                PixelButton(label: AppText.shared["always"], fg: .white.opacity(0.95), bg: Color(red: 0.14, green: 0.28, blue: 0.52), border: Color(red: 0.28, green: 0.48, blue: 0.82), action: onAlwaysAllow)
             }
             .padding(.horizontal, 14)
         }
@@ -175,7 +175,7 @@ struct ApprovalBar: View {
                 }
                 if let offset = toolInput?["offset"] as? Int,
                    let limit = toolInput?["limit"] as? Int {
-                    Text("\(L10n.shared["lines"]) \(offset + 1)–\(offset + limit)")
+                    Text("\(AppText.shared["lines"]) \(offset + 1)–\(offset + limit)")
                         .font(.system(size: 9, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.4))
                 }

@@ -28,14 +28,14 @@ struct CodexComposerBar: View {
                 Text(">")
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color(red: 0.3, green: 0.85, blue: 0.4))
-                TextField(L10n.shared["type_message"], text: $text)
+                TextField(AppText.shared["type_message"], text: $text)
                     .textFieldStyle(.plain)
                     .font(.system(size: 10.5, design: .monospaced))
                     .foregroundStyle(.white)
                     .focused($isFocused)
                     .onSubmit(onSubmit)
                 Button(action: onSubmit) {
-                    Text(L10n.shared["send"])
+                    Text(AppText.shared["send"])
                         .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.9))
                         .padding(.horizontal, 8)
@@ -178,7 +178,7 @@ struct SessionStatusTagRow: View {
                 SessionTag("YOLO", color: Color(red: 1.0, green: 0.35, blue: 0.35))
             }
             if needsCompletionReview {
-                SessionTag(L10n.shared["completion_pending_review"], color: completionReviewColor)
+                SessionTag(AppText.shared["completion_pending_review"], color: completionReviewColor)
             }
             SessionTag(timeAgoText(session.lastActivity))
         }
@@ -232,7 +232,7 @@ struct SessionsExpandLink: View {
         Button(action: action) {
             HStack(spacing: 6) {
                 Rectangle().fill(.white.opacity(0.15)).frame(height: 1)
-                Text("\(count) \(L10n.shared["n_sessions"])")
+                Text("\(count) \(AppText.shared["n_sessions"])")
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundStyle(.white.opacity(hovering ? 0.7 : 0.45))
                 Image(systemName: "chevron.down")

@@ -40,9 +40,11 @@ enum AutomationUsageMonitorSupport {
         let hours = (clamped % (24 * 60 * 60)) / (60 * 60)
         let minutes = (clamped % (60 * 60)) / 60
 
-        if days > 0 { return "\(days)d" }
-        if hours > 0 { return minutes > 0 ? "\(hours)h\(String(format: "%02d", minutes))m" : "\(hours)h" }
-        return "\(max(minutes, 0))m"
+        if days > 0 { return "\(days) 天" }
+        if hours > 0 {
+            return minutes > 0 ? "\(hours) 小时 \(minutes) 分" : "\(hours) 小时"
+        }
+        return "\(max(minutes, 0)) 分"
     }
 
     static func formatResetDeadline(
@@ -53,6 +55,7 @@ enum AutomationUsageMonitorSupport {
         guard timestamp > 0 else { return "--" }
 
         let formatter = DateFormatter()
+        formatter.locale = AppLocale.chinese
         let target = Date(timeIntervalSince1970: TimeInterval(timestamp))
 
         if calendar.isDate(target, inSameDayAs: now) {
@@ -62,7 +65,7 @@ enum AutomationUsageMonitorSupport {
 
         let currentYear = calendar.component(.year, from: now)
         let targetYear = calendar.component(.year, from: target)
-        formatter.dateFormat = currentYear == targetYear ? "M/d" : "yyyy-MM-dd"
+        formatter.dateFormat = currentYear == targetYear ? "M月d日" : "yyyy年M月d日"
         return formatter.string(from: target)
     }
 
@@ -70,7 +73,7 @@ enum AutomationUsageMonitorSupport {
         timestamp: TimeInterval,
         now: Date = Date(),
         calendar: Calendar = .current,
-        locale: Locale = .current,
+        locale: Locale = AppLocale.chinese,
         timeZone: TimeZone = .current
     ) -> String {
         guard timestamp > 0 else { return "--" }
@@ -156,12 +159,12 @@ enum AutomationUsageMonitorSupport {
 
     static func formatTokenCount(_ totalTokens: Int) -> String {
         if totalTokens >= 1_000_000 {
-            return String(format: "%.1fM tokens", Double(totalTokens) / 1_000_000)
+            return String(format: "%.1fM 令牌", Double(totalTokens) / 1_000_000)
         }
         if totalTokens >= 1_000 {
-            return String(format: "%.1fK tokens", Double(totalTokens) / 1_000)
+            return String(format: "%.1fK 令牌", Double(totalTokens) / 1_000)
         }
-        return "\(totalTokens) tokens"
+        return "\(totalTokens) 令牌"
     }
 
     static func codexUsageSummary(payload: [String: Any]) -> String? {
@@ -177,7 +180,7 @@ enum AutomationUsageMonitorSupport {
             let unlimited = (credits["unlimited"] as? Bool) == true
 
             if unlimited {
-                parts.append("Credits unlimited")
+                parts.append("Credits 不限量")
             } else if hasCredits, let balance {
                 parts.append("Credits \(balance)")
             }
@@ -185,7 +188,7 @@ enum AutomationUsageMonitorSupport {
 
         if let spendControl = payload["spend_control"] as? [String: Any],
            let reached = spendControl["reached"] as? Bool {
-            parts.append(reached ? "Spend blocked" : "Spend OK")
+            parts.append(reached ? "支出已触发限制" : "支出正常")
         }
 
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
@@ -220,7 +223,7 @@ enum AutomationUsageMonitorSupport {
 
     static func cursorResetDetail(resetAt: TimeInterval?, now: Date = Date()) -> String {
         guard let resetAt else { return "--" }
-        return "Resets \(formatResetDeadline(timestamp: Int(resetAt), now: now))"
+        return "重置于 \(formatResetDeadline(timestamp: Int(resetAt), now: now))"
     }
 
     static func cursorUsageSummary(
@@ -232,10 +235,10 @@ enum AutomationUsageMonitorSupport {
         sourceLabel: String,
         apiPercent: Int?
     ) -> String? {
-        var parts: [String] = ["Cursor Web API via \(sourceLabel)"]
+        var parts: [String] = ["Cursor Web API（来源：\(sourceLabel)）"]
 
         if let membershipType = nonEmptyString(payload["membershipType"]) {
-            parts.append("Plan \(membershipType.capitalized)")
+            parts.append("套餐 \(membershipType.capitalized)")
         }
 
         if let apiPercent {
@@ -245,21 +248,21 @@ enum AutomationUsageMonitorSupport {
         let planUsed = doubleValue(plan?["used"]) / 100
         let planLimit = doubleValue(plan?["limit"]) / 100
         if planUsed > 0 || planLimit > 0 {
-            parts.append("Included \(formatUSD(planUsed))/\(formatUSD(planLimit))")
+            parts.append("套餐内 \(formatUSD(planUsed))/\(formatUSD(planLimit))")
         }
 
         let onDemandUsed = doubleValue(individualOnDemand?["used"]) / 100
         let onDemandLimit = doubleValue(individualOnDemand?["limit"]) / 100
         if onDemandUsed > 0 || onDemandLimit > 0 {
             let suffix = onDemandLimit > 0 ? "/\(formatUSD(onDemandLimit))" : ""
-            parts.append("On-demand \(formatUSD(onDemandUsed))\(suffix)")
+            parts.append("按量 \(formatUSD(onDemandUsed))\(suffix)")
         }
 
         let teamOnDemandUsed = doubleValue(teamOnDemand?["used"]) / 100
         let teamOnDemandLimit = doubleValue(teamOnDemand?["limit"]) / 100
         if teamOnDemandUsed > 0 || teamOnDemandLimit > 0 {
             let suffix = teamOnDemandLimit > 0 ? "/\(formatUSD(teamOnDemandLimit))" : ""
-            parts.append("Team \(formatUSD(teamOnDemandUsed))\(suffix)")
+            parts.append("团队 \(formatUSD(teamOnDemandUsed))\(suffix)")
         }
 
         if let email = nonEmptyString(userInfo?["email"]) {
@@ -276,8 +279,8 @@ enum AutomationUsageMonitorSupport {
     static func claudeQuotaSummary(sourceLabel: String, hasLocalHistory: Bool) -> String? {
         guard hasLocalHistory else { return sourceLabel == "Claude Code OAuth" ? nil : sourceLabel }
         if sourceLabel == "Claude Code OAuth" {
-            return "Quota + local token history"
+            return "配额 + 本地令牌历史"
         }
-        return "\(sourceLabel) + local token history"
+        return "\(sourceLabel) + 本地令牌历史"
     }
 }

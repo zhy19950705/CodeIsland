@@ -77,7 +77,7 @@ extension UsageMonitorCommand {
                 primary: previousSnapshot.primary,
                 secondary: previousSnapshot.secondary,
                 updatedAtUnix: updatedAtUnix,
-                summary: "Using cached Cursor quota",
+                summary: "使用缓存的 Cursor 配额",
                 monthly: nil,
                 history: nil,
                 showsQuotaBadge: true
@@ -155,7 +155,7 @@ extension UsageMonitorCommand {
         let resetDetail = AutomationUsageMonitorSupport.cursorResetDetail(resetAt: billingCycleEnd)
 
         var primary = CursorWindow(
-            label: "Total",
+            label: "总览",
             usedPercent: totalPercent,
             detail: resetDetail
         )
@@ -358,7 +358,7 @@ extension UsageMonitorCommand {
         let requestDetail = "\(used)/\(limit) req"
 
         return CursorWindow(
-            label: "Req",
+            label: "请求",
             usedPercent: percentage,
             detail: resetDetail == "--" ? requestDetail : "\(requestDetail) · \(resetDetail)"
         )
@@ -371,13 +371,13 @@ extension UsageMonitorCommand {
         resetDetail: String
     ) -> CursorWindow {
         if let autoPercent {
-            return CursorWindow(label: "Auto", usedPercent: autoPercent, detail: resetDetail)
+            return CursorWindow(label: "自动", usedPercent: autoPercent, detail: resetDetail)
         }
 
         if let apiPercent {
             return CursorWindow(label: "API", usedPercent: apiPercent, detail: resetDetail)
         }
 
-        return CursorWindow(label: "Plan", usedPercent: fallbackPercent, detail: resetDetail)
+        return CursorWindow(label: "套餐", usedPercent: fallbackPercent, detail: resetDetail)
     }
 }

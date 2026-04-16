@@ -4,7 +4,7 @@ import SuperIslandCore
 
 // These row-level components are shared by the hooks and AI settings pages, so keep them out of the page shell.
 struct EditorBridgeRow: View {
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
     let snapshot: EditorBridgeSnapshot
     let onOpen: () -> Void
     let onInstallExtension: () -> Void
@@ -63,7 +63,7 @@ struct EditorBridgeRow: View {
 }
 
 struct CLIIntegrationRow: View {
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
     let snapshot: CLIIntegrationSnapshot
     let onOpenConfig: () -> Void
     let onToggle: (Bool) -> Void
@@ -151,7 +151,7 @@ private struct IntegrationStateBadge: View {
 
 // CodexManagedAccountRow is reused by the AI settings page, so keep it isolated from hooks-specific views.
 struct CodexManagedAccountRow: View {
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
     let account: CodexManagedAccount
     let isActive: Bool
     let onActivate: () -> Void

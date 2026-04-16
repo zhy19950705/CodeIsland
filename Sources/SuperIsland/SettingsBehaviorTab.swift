@@ -5,7 +5,7 @@ import SuperIslandCore
 // MARK: - Behavior Page
 
 struct BehaviorPage: View {
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
     @AppStorage(SettingsKey.hideInFullscreen) private var hideInFullscreen = SettingsDefaults.hideInFullscreen
     @AppStorage(SettingsKey.hideWhenNoSession) private var hideWhenNoSession = SettingsDefaults.hideWhenNoSession
     @AppStorage(SettingsKey.smartSuppress) private var smartSuppress = SettingsDefaults.smartSuppress
@@ -42,11 +42,11 @@ struct BehaviorPage: View {
                     animation: .collapseMouseLeave
                 )
                 Picker(selection: $completionCardDisplaySeconds) {
-                    Text("5s").tag(5)
-                    Text("8s").tag(8)
-                    Text("10s").tag(10)
-                    Text("15s").tag(15)
-                    Text("20s").tag(20)
+                    Text("5 秒").tag(5)
+                    Text("8 秒").tag(8)
+                    Text("10 秒").tag(10)
+                    Text("15 秒").tag(15)
+                    Text("20 秒").tag(20)
                 } label: {
                     Text(l10n["completion_card_display_time"])
                     Text(l10n["completion_card_display_time_desc"])

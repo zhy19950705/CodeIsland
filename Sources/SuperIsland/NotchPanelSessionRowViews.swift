@@ -142,7 +142,7 @@ struct SessionCard: View {
                                 .foregroundStyle(Color(red: 0.85, green: 0.47, blue: 0.34))
                             TypingIndicator(
                                 fontSize: fontSize,
-                                label: "thinking",
+                                label: "思考中",
                                 color: chrome.secondaryText
                             )
                         }

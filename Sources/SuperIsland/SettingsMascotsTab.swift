@@ -5,7 +5,7 @@ import SuperIslandCore
 // MARK: - Mascots Page
 
 struct MascotsPage: View {
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
     @State private var previewStatus: AgentStatus = .processing
     @AppStorage(SettingsKey.mascotSpeed) private var mascotSpeed = SettingsDefaults.mascotSpeed
     @AppStorage(SettingsKey.mascotOverridesVersion) private var mascotOverridesVersion = 0
@@ -51,15 +51,15 @@ struct MascotsPage: View {
 
             Section {
                 HStack {
-                    Text("Per-client mascot override")
+                    Text(l10n["mascot_override_per_client"])
                     Spacer()
-                    Text("\(MascotOverrides.customizedCount()) customized")
+                    Text(String(format: l10n["mascot_override_customized"], MascotOverrides.customizedCount()))
                         .foregroundStyle(.secondary)
                         .font(.caption)
                 }
 
                 if MascotOverrides.customizedCount() > 0 {
-                    Button("Reset all mascot overrides", role: .destructive) {
+                    Button(l10n["mascot_reset_all_overrides"], role: .destructive) {
                         MascotOverrides.resetAll()
                     }
                 }
@@ -82,6 +82,8 @@ struct MascotsPage: View {
 }
 
 private struct MascotRow: View {
+    // Reuse the shared Chinese copy catalog so the row stays consistent with the parent settings page.
+    private let l10n = AppText.shared
     let name: String
     let source: String
     let desc: String
@@ -129,7 +131,7 @@ private struct MascotRow: View {
                                 .frame(width: 16, height: 16)
                         }
                         if isCustomized {
-                            Text("custom")
+                            Text(l10n["mascot_custom_badge"])
                                 .font(.system(size: 10, weight: .semibold))
                                 .foregroundStyle(.orange)
                                 .padding(.horizontal, 6)
@@ -145,7 +147,7 @@ private struct MascotRow: View {
                         .foregroundStyle(.secondary)
 
                     if effectiveSource != source {
-                        Text("Using \(effectiveSource.capitalized) mascot")
+                        Text(String(format: l10n["mascot_using_override_format"], effectiveSource.capitalized))
                             .font(.system(size: 11))
                             .foregroundStyle(.tertiary)
                     }
@@ -154,8 +156,8 @@ private struct MascotRow: View {
                 Spacer()
             }
 
-            Picker("Mascot", selection: selection) {
-                Text("Follow default").tag(automaticSelection)
+            Picker(l10n["mascot_picker_title"], selection: selection) {
+                Text(l10n["mascot_follow_default"]).tag(automaticSelection)
                 Text("Clawd").tag("claude")
                 Text("Dex").tag("codex")
                 Text("Gemini").tag("gemini")
@@ -168,7 +170,7 @@ private struct MascotRow: View {
             }
 
             if isCustomized {
-                Button("Reset this override") {
+                Button(l10n["mascot_reset_override"]) {
                     MascotOverrides.setOverride(nil, for: source)
                 }
                 .font(.caption)

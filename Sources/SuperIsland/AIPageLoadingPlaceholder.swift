@@ -7,10 +7,10 @@ struct AIPageLoadingPlaceholder: View {
             ProgressView()
                 .controlSize(.small)
 
-            Text("Loading AI settings…")
+            Text(AppText.shared["loading_ai_settings"])
                 .font(.system(size: 13, weight: .semibold))
 
-            Text("Usage monitor and Codex account state will appear in a moment.")
+            Text(AppText.shared["loading_ai_settings_desc"])
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

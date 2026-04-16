@@ -94,7 +94,7 @@ struct QuestionBar: View {
                     Text(">")
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color(red: 0.3, green: 0.85, blue: 0.4))
-                    TextField(L10n.shared["type_answer"], text: $textInput)
+                    TextField(AppText.shared["type_answer"], text: $textInput)
                         .textFieldStyle(.plain)
                         .font(.system(size: 10.5, design: .monospaced))
                         .foregroundStyle(.white)
@@ -116,7 +116,7 @@ struct QuestionBar: View {
 
             HStack(spacing: 6) {
                 PixelButton(
-                    label: L10n.shared["skip"],
+                    label: AppText.shared["skip"],
                     fg: .white.opacity(0.6),
                     bg: Color.white.opacity(0.06),
                     border: Color.white.opacity(0.12),
@@ -124,7 +124,7 @@ struct QuestionBar: View {
                 )
                 if options == nil || options?.isEmpty == true {
                     PixelButton(
-                        label: L10n.shared["submit"],
+                        label: AppText.shared["submit"],
                         fg: .white.opacity(0.95),
                         bg: Color(red: 0.16, green: 0.38, blue: 0.18),
                         border: Color(red: 0.28, green: 0.62, blue: 0.32),

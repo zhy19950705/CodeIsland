@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct SkillsPage: View {
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
     @Bindable var viewModel: SkillPlatformViewModel
     @State private var selectedTab: SkillsPageTab = .library
     @State private var skillPendingDeletion: InstalledSkill?
@@ -261,7 +261,7 @@ private enum SkillsPageTab: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    func title(l10n: L10n) -> String {
+    func title(l10n: AppText) -> String {
         switch self {
         case .library:
             return l10n["skills_tab_library"]

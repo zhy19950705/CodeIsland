@@ -6,7 +6,7 @@ struct BashResultContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let backgroundTaskId = result.backgroundTaskId {
-                Text("Background task: \(backgroundTaskId)")
+                Text("后台任务：\(backgroundTaskId)")
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.blue.opacity(0.82))
             }
@@ -25,7 +25,7 @@ struct BashResultContent: View {
                     .lineLimit(10)
             }
             if !result.hasOutput && result.backgroundTaskId == nil && result.returnCodeInterpretation == nil {
-                Text("(No output)")
+                Text("（无输出）")
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.3))
             }
@@ -42,7 +42,7 @@ struct GrepResultContent: View {
             switch result.mode {
             case .filesWithMatches:
                 if result.filenames.isEmpty {
-                    EmptyToolResultLabel("No matches")
+                    EmptyToolResultLabel("没有匹配结果")
                 } else {
                     FileListView(files: result.filenames, limit: 10, linkContext: linkContext)
                 }
@@ -50,10 +50,10 @@ struct GrepResultContent: View {
                 if let content = result.content, !content.isEmpty {
                     CodePreview(content: content, maxLines: 12)
                 } else {
-                    EmptyToolResultLabel("No matches")
+                    EmptyToolResultLabel("没有匹配结果")
                 }
             case .count:
-                Text("\(result.numFiles) files matched")
+                Text("匹配到 \(result.numFiles) 个文件")
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.56))
             }
@@ -68,12 +68,12 @@ struct GlobResultContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if result.filenames.isEmpty {
-                EmptyToolResultLabel("No files")
+                EmptyToolResultLabel("没有文件")
             } else {
                 FileListView(files: result.filenames, limit: 10, linkContext: linkContext)
             }
             if result.truncated {
-                Text("More results were truncated")
+                Text("更多结果已被截断")
                     .font(.system(size: 11))
                     .foregroundStyle(.white.opacity(0.32))
             }
@@ -96,7 +96,7 @@ struct TaskResultContent: View {
                         .foregroundStyle(.white.opacity(0.42))
                 }
                 if let totalToolUseCount = result.totalToolUseCount {
-                    Text("\(totalToolUseCount) tools")
+                    Text("\(totalToolUseCount) 个工具")
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.42))
                 }
@@ -164,7 +164,7 @@ struct WebSearchResultContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if result.results.isEmpty {
-                EmptyToolResultLabel("No results")
+                EmptyToolResultLabel("没有结果")
             } else {
                 ForEach(Array(result.results.prefix(5).enumerated()), id: \.offset) { _, item in
                     VStack(alignment: .leading, spacing: 2) {

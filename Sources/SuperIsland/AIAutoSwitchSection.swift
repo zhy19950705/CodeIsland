@@ -2,7 +2,7 @@ import SwiftUI
 
 // AIAutoSwitchSection isolates the launch-agent controls and threshold settings from the page-level async actions.
 struct AIAutoSwitchSection: View {
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
     let autoSwitchSnapshot: CodexAutoSwitchLaunchAgentSnapshot
     let isTogglingAutoSwitch: Bool
     let isRunningAutoSwitch: Bool

@@ -27,7 +27,7 @@ extension UsageMonitorCommand {
         return UsageProviderSnapshot(
             source: .codex,
             primary: UsageWindowStat(
-                label: "5h",
+                label: "5小时",
                 percentage: primaryRemaining,
                 detail: AutomationUsageMonitorSupport.codexWindowDetail(
                     resetAtUnix: quota.primary.resetAtUnix,
@@ -42,7 +42,7 @@ extension UsageMonitorCommand {
                 tintHex: AutomationUsageMonitorSupport.tintHex(forRemainingPercentage: primaryRemaining)
             ),
             secondary: UsageWindowStat(
-                label: "7d",
+                label: "7天",
                 percentage: secondaryRemaining,
                 detail: AutomationUsageMonitorSupport.codexWindowDetail(
                     resetAtUnix: quota.secondary.resetAtUnix,

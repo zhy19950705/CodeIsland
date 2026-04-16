@@ -87,14 +87,14 @@ extension UsageMonitorCommand {
             return UsageProviderSnapshot(
                 source: .claude,
                 primary: UsageWindowStat(
-                    label: "5h",
+                    label: "5小时",
                     percentage: primaryUsed,
                     detail: AutomationUsageMonitorSupport.claudeWindowDetail(resetAt: quota.primary.resetAt),
                     refreshAtUnix: quota.primary.resetAt,
                     tintHex: AutomationUsageMonitorSupport.tintHex(forUsedPercentage: primaryUsed)
                 ),
                 secondary: UsageWindowStat(
-                    label: "7d",
+                    label: "7天",
                     percentage: secondaryUsed,
                     detail: AutomationUsageMonitorSupport.claudeWindowDetail(resetAt: quota.secondary.resetAt),
                     refreshAtUnix: quota.secondary.resetAt,
@@ -121,7 +121,7 @@ extension UsageMonitorCommand {
                 primary: previousSnapshot.primary,
                 secondary: previousSnapshot.secondary,
                 updatedAtUnix: updatedAtUnix,
-                summary: history.monthly == nil ? "Using cached quota" : "Using cached quota + local token history",
+                summary: history.monthly == nil ? "使用缓存额度" : "使用缓存额度与本地 token 历史",
                 monthly: history.monthly,
                 history: history.history.isEmpty ? nil : history.history,
                 showsQuotaBadge: true
@@ -135,19 +135,19 @@ extension UsageMonitorCommand {
         return UsageProviderSnapshot(
             source: .claude,
             primary: UsageWindowStat(
-                label: "30d",
+                label: "30天",
                 percentage: 0,
                 detail: history.monthly.map { AutomationUsageMonitorSupport.formatTokenCount($0.totalTokens) } ?? "--",
                 tintHex: "#7A7A7A"
             ),
             secondary: UsageWindowStat(
-                label: "log",
+                label: "日志",
                 percentage: 0,
-                detail: "Local history",
+                detail: "本地历史",
                 tintHex: "#7A7A7A"
             ),
             updatedAtUnix: now,
-            summary: "Quota unavailable; showing local Claude token history",
+            summary: "额度不可用，当前展示本地 Claude 令牌历史",
             monthly: history.monthly,
             history: history.history.isEmpty ? nil : history.history,
             showsQuotaBadge: false

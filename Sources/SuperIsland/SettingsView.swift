@@ -65,7 +65,7 @@ private let sidebarGroups: [SidebarGroup] = [
 // MARK: - Main View
 
 struct SettingsView: View {
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
     let appState: AppState?
     @State private var selectedPage: SettingsPage = .general
     @State private var skillPlatformViewModel = SkillPlatformViewModel()
@@ -122,7 +122,7 @@ struct SettingsView: View {
 }
 
 private struct SidebarRow: View {
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
     let page: SettingsPage
 
     var body: some View {

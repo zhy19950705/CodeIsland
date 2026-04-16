@@ -65,6 +65,10 @@ final class AppState {
     var maxHistory: Int { SettingsManager.shared.maxToolHistory }
     var autoCollapseTask: Task<Void, Never>?
     var completionQueue: [String] = []
+    /// 完成通知按出现顺序保留一份轻量序列，用来显示“第几条 / 共几条”。
+    var completionSequence: [String] = []
+    /// 当前正在看的完成通知在序列中的位置，便于“下一条”切换时保持进度。
+    var completionSequenceIndex: Int = 0
     /// Testing hooks can stage delayed completion injections, so keep the active task cancellable across repeated runs.
     @ObservationIgnored var testingCompletionInjectionTask: Task<Void, Never>?
     var processMonitors: [String: (source: DispatchSourceProcess, pid: pid_t)] = [:]

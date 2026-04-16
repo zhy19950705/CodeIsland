@@ -385,7 +385,7 @@ final class StatusItemController: NSObject {
         let menu = NSMenu()
 
         let settingsItem = NSMenuItem(
-            title: L10n.shared["settings_ellipsis"],
+            title: AppText.shared["settings_ellipsis"],
             action: #selector(openSettings),
             keyEquivalent: ""
         )
@@ -395,7 +395,7 @@ final class StatusItemController: NSObject {
         menu.addItem(.separator())
 
         let quitItem = NSMenuItem(
-            title: L10n.shared["quit"],
+            title: AppText.shared["quit"],
             action: #selector(quitApp),
             keyEquivalent: ""
         )

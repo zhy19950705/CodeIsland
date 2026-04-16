@@ -184,7 +184,7 @@ enum UsageMonitorLaunchAgentError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .executableMissing:
-            "Missing executable"
+            "缺少可执行文件"
         case let .launchctlFailed(message):
             message
         }
@@ -206,7 +206,7 @@ final class UsageMonitorLaunchAgentManager {
               fileManager.fileExists(atPath: executableURL.path) else {
             return UsageMonitorLaunchAgentSnapshot(
                 state: .unavailable,
-                detail: "SuperIsland executable is unavailable",
+                detail: "SuperIsland 可执行文件不可用",
                 plistPath: plistURL.path
             )
         }
@@ -215,7 +215,7 @@ final class UsageMonitorLaunchAgentManager {
            installedExecutablePath != executableURL.path {
             return UsageMonitorLaunchAgentSnapshot(
                 state: .disabled,
-                detail: "Installed for an older build path; re-enable to repair",
+                detail: "当前安装记录指向旧构建路径，请重新启用以修复",
                 plistPath: plistURL.path,
                 needsRepair: true
             )
@@ -223,8 +223,8 @@ final class UsageMonitorLaunchAgentManager {
 
         if let service = serviceStatus() {
             if service.jobState == "spawn failed" {
-                let detail = service.lastExitCode.map { "Monitor failed to start (exit \($0)); re-enable to repair" }
-                    ?? "Monitor failed to start; re-enable to repair"
+                let detail = service.lastExitCode.map { "监控进程启动失败（退出码 \($0)），请重新启用以修复" }
+                    ?? "监控进程启动失败，请重新启用以修复"
                 return UsageMonitorLaunchAgentSnapshot(
                     state: .disabled,
                     detail: detail,
@@ -251,8 +251,8 @@ final class UsageMonitorLaunchAgentManager {
         }
 
         let detail = fileManager.fileExists(atPath: plistURL.path)
-            ? "Installed but not loaded"
-            : "LaunchAgent not installed"
+            ? "已安装但未加载"
+            : "未安装 LaunchAgent"
         return UsageMonitorLaunchAgentSnapshot(state: .disabled, detail: detail, plistPath: plistURL.path)
     }
 

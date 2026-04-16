@@ -10,7 +10,7 @@ struct SessionDetailView: View {
 
     @State private var codexInput = ""
     @State private var isHeaderHovered = false
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -32,11 +32,19 @@ struct SessionDetailView: View {
         appState.surface == .completionCard(sessionId: sessionId)
     }
 
+    private var completionProgress: (current: Int, total: Int)? {
+        appState.completionProgress(for: sessionId)
+    }
+
     /// Header mirrors MioIsland's dedicated chat surface: back to the list, keep session identity visible.
     private var detailHeader: some View {
         VStack(spacing: 8) {
             HStack(spacing: 10) {
                 detailBackButton
+
+                if isCompletionPresentation {
+                    completionNavigationControls
+                }
 
                 SessionJumpButton(session: session) {
                     appState.jumpToSession(sessionId)
@@ -54,15 +62,8 @@ struct SessionDetailView: View {
     /// Match MioIsland's broader back affordance so users can click the header strip, not just the text itself.
     private var detailBackButton: some View {
         Button {
-            if isCompletionPresentation {
-                // Completion detail acts like a transient notification surface, so
-                // "back" should advance the queue instead of dumping the user into the list.
-                appState.showNextCompletionOrCollapse()
-            } else {
-                // Route the back tap through the coordinator's staged navigation entry
-                // so the list/detail swap does not fight the current click layout pass.
-                appState.panelCoordinator.handleDetailBackTap()
-            }
+            // 返回统一回到列表，完成流的“下一条”改成显式按钮，避免一个按钮承担两层语义。
+            appState.panelCoordinator.handleDetailBackTap()
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: "chevron.left")
@@ -97,6 +98,30 @@ struct SessionDetailView: View {
                 isHeaderHovered = hovering
             }
         }
+    }
+
+    /// 完成流只暴露轻量进度和“下一条”，保持通知感，不把头部做成完整轮播工具栏。
+    private var completionNavigationControls: some View {
+        HStack(spacing: 8) {
+            if let completionProgress {
+                Text("\(completionProgress.current) / \(completionProgress.total)")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.68))
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 7)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(Color.white.opacity(0.08))
+                    )
+            }
+
+            Button(appState.completionAdvanceButtonTitle(for: sessionId)) {
+                appState.advanceCompletionPresentation(from: sessionId)
+            }
+            .buttonStyle(.plain)
+            .modifier(DetailActionChipModifier(tint: .white.opacity(0.9)))
+        }
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     /// Compact status chips make the dedicated detail surface easier to parse without reopening the list.

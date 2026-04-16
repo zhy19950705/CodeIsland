@@ -24,13 +24,13 @@ extension UpdateChecker {
         let installTargetPath = Self.resolveInstallTargetPath(currentAppPath: currentAppPath)
 
         do {
-            updateProgress(message: L10n.shared["update_progress_prepare"], fractionCompleted: nil)
-            updateProgress(message: String(format: L10n.shared["update_progress_download_percent"], 0), fractionCompleted: 0)
+            updateProgress(message: AppText.shared["update_progress_prepare"], fractionCompleted: nil)
+            updateProgress(message: String(format: AppText.shared["update_progress_download_percent"], 0), fractionCompleted: 0)
 
             Self.log.info("Downloading update from \(dmgURL.absoluteString)")
             try await downloadUpdate(from: dmgURL, to: dmgURLOnDisk)
 
-            updateProgress(message: L10n.shared["update_progress_mounting"], fractionCompleted: nil)
+            updateProgress(message: AppText.shared["update_progress_mounting"], fractionCompleted: nil)
 
             try await Self.installAppFromDMG(
                 dmgPath: dmgURLOnDisk.path,
@@ -38,7 +38,7 @@ extension UpdateChecker {
                 targetAppPath: installTargetPath
             )
 
-            updateProgress(message: L10n.shared["update_progress_relaunching"], fractionCompleted: nil)
+            updateProgress(message: AppText.shared["update_progress_relaunching"], fractionCompleted: nil)
             availableUpdate = nil
 
             Self.log.info("Scheduling relaunch for \(installTargetPath)")
@@ -56,7 +56,7 @@ extension UpdateChecker {
         let delegate = DownloadDelegate(destinationURL: destinationURL) { [weak self] progress in
             Task { @MainActor in
                 self?.updateProgress(
-                    message: String(format: L10n.shared["update_progress_download_percent"], Int(progress * 100)),
+                    message: String(format: AppText.shared["update_progress_download_percent"], Int(progress * 100)),
                     fractionCompleted: progress
                 )
             }
@@ -81,7 +81,7 @@ extension UpdateChecker {
         presentProgressWindow()
         progressWindowController?.update(
             message: message,
-            detail: L10n.shared["update_progress_detail"],
+            detail: AppText.shared["update_progress_detail"],
             fractionCompleted: fractionCompleted
         )
     }
@@ -174,7 +174,7 @@ private extension UpdateChecker {
 
                 await MainActor.run {
                     UpdateChecker.shared.updateProgress(
-                        message: L10n.shared["update_progress_installing"],
+                        message: AppText.shared["update_progress_installing"],
                         fractionCompleted: nil
                     )
                 }

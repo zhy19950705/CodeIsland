@@ -8,6 +8,7 @@ struct CompactLeftWing: View {
     let mascotSize: CGFloat
     let hasNotch: Bool
     let showToolStatus: Bool
+    @ObservedObject private var l10n = AppText.shared
     @AppStorage(SettingsKey.sessionGroupingMode) private var groupingMode = SettingsDefaults.sessionGroupingMode
 
     private var displaySession: SessionSnapshot? {
@@ -26,7 +27,13 @@ struct CompactLeftWing: View {
                 AppLogoView(size: 36, showBackground: false)
                 if appState.sessions.count > 1 {
                     HStack(spacing: 1) {
-                        ForEach([("all", "ALL"), ("project", "PRJ"), ("status", "STA"), ("cli", "CLI")], id: \.0) { tag, label in
+                        // Use short Chinese labels here so the grouping meaning stays obvious without widening the bar too much.
+                        ForEach([
+                            ("all", l10n["group_all_compact"]),
+                            ("project", l10n["group_project_compact"]),
+                            ("status", l10n["group_status_compact"]),
+                            ("cli", l10n["group_cli_compact"]),
+                        ], id: \.0) { tag, label in
                             let selected = groupingMode == tag
                             Button {
                                 withAnimation(.easeInOut(duration: 0.15)) { groupingMode = tag }
@@ -36,7 +43,7 @@ struct CompactLeftWing: View {
                                     color: selected ? Color(red: 0.3, green: 0.85, blue: 0.4) : .white.opacity(0.3),
                                     pixelSize: 1.3
                                 )
-                                .frame(minWidth: 32, minHeight: 22)
+                                .frame(minWidth: 42, minHeight: 22)
                                 .background(
                                     Rectangle().fill(selected ? .white.opacity(0.1) : .clear)
                                 )

@@ -5,9 +5,8 @@ import SuperIslandCore
 // MARK: - General Page
 
 struct GeneralPage: View {
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
     @StateObject private var screenSelector = ScreenSelector.shared
-    @AppStorage(SettingsKey.allowHorizontalDrag) private var allowHorizontalDrag = SettingsDefaults.allowHorizontalDrag
     @AppStorage(SettingsKey.menuBarShowDetail) private var menuBarShowDetail = SettingsDefaults.menuBarShowDetail
     @State private var launchAtLogin: Bool
     @State private var displayMode: DisplayMode
@@ -20,24 +19,10 @@ struct GeneralPage: View {
     var body: some View {
         Form {
             Section {
-                Picker(l10n["language"], selection: $l10n.language) {
-                    Text(l10n["system_language"]).tag("system")
-                    Text("English").tag("en")
-                    Text("中文").tag("zh")
-                }
                 Toggle(l10n["launch_at_login"], isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, v in
                         SettingsManager.shared.launchAtLogin = v
                     }
-                Toggle(l10n["allow_horizontal_drag"], isOn: $allowHorizontalDrag)
-                    .onChange(of: allowHorizontalDrag) { _, enabled in
-                        if !enabled {
-                            SettingsManager.shared.panelHorizontalOffset = 0
-                        }
-                    }
-                Text(l10n["allow_horizontal_drag_desc"])
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 Picker(l10n["display_mode"], selection: $displayMode) {
                     Text(l10n["display_mode_auto"]).tag(DisplayMode.auto)
                     Text(l10n["display_mode_notch"]).tag(DisplayMode.notch)

@@ -5,7 +5,7 @@ import SuperIslandCore
 // MARK: - Shortcuts Page
 
 struct ShortcutsPage: View {
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
     @State private var recordingAction: ShortcutAction?
     @State private var eventMonitor: Any?
     @State private var refreshKey = 0
@@ -75,7 +75,7 @@ private struct ShortcutRow: View {
     let isRecording: Bool
     let onStartRecording: () -> Void
     let onClear: () -> Void
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
 
     private var conflict: ShortcutAction? { action.conflictingAction() }
 

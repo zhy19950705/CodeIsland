@@ -275,7 +275,7 @@ extension SkillManager {
                 agent: agent,
                 skillsURL: path,
                 state: .native,
-                detail: "Uses the shared library directly"
+                detail: "直接使用共享技能库"
             )
         }
 
@@ -284,7 +284,7 @@ extension SkillManager {
                 agent: agent,
                 skillsURL: path,
                 state: .missing,
-                detail: "Not linked yet"
+                detail: "尚未链接"
             )
         }
 
@@ -299,7 +299,7 @@ extension SkillManager {
                         agent: agent,
                         skillsURL: path,
                         state: .linked,
-                        detail: "Linked to \(displayPath(sharedRootURL))"
+                        detail: "已链接到 \(displayPath(sharedRootURL))"
                     )
                 }
             }
@@ -316,7 +316,7 @@ extension SkillManager {
             agent: agent,
             skillsURL: path,
             state: .conflict,
-            detail: "Already exists but is not linked to the shared library"
+            detail: "目录已存在，但没有链接到共享技能库"
         )
     }
 

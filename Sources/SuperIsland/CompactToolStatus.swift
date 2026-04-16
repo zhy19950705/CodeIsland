@@ -68,7 +68,7 @@ struct CompactToolStatus: View {
                 }
             } else if displayStatus == .processing {
                 ProcessingSpinner(fontSize: 11)
-                TypingIndicator(fontSize: 11, label: "thinking", bright: true)
+                TypingIndicator(fontSize: 11, label: "思考中", bright: true)
                     .id("thinking-\(appState.rotatingSessionId ?? "")")
             }
         }

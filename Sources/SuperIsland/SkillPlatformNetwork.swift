@@ -218,9 +218,13 @@ extension SkillManager {
             sourceURL: repository.htmlURL,
             metadata: [
                 "Stars \(repository.stars)",
-                repository.language.map { "Language \($0)" },
+                repository.language.map { "语言 \($0)" },
                 !repository.topics.isEmpty ? "Topics \(repository.topics.prefix(5).joined(separator: ", "))" : nil,
-                "Updated \(RelativeDateTimeFormatter().localizedString(for: repository.updatedAt, relativeTo: Date()))",
+                {
+                    let formatter = RelativeDateTimeFormatter()
+                    formatter.locale = AppLocale.chinese
+                    return "更新于 \(formatter.localizedString(for: repository.updatedAt, relativeTo: Date()))"
+                }(),
             ].compactMap { $0 }
         )
     }

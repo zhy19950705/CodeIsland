@@ -4,7 +4,7 @@ import SuperIslandCore
 
 // AIPage owns the state and async actions for usage monitoring and Codex account management.
 struct AIPage: View {
-    @ObservedObject var l10n = L10n.shared
+    @ObservedObject var l10n = AppText.shared
     // Start from an empty snapshot so switching into the AI tab does not synchronously hit disk on the main thread.
     @State var usageSnapshot: UsageSnapshot = .empty
     @State var usageMonitorSnapshot = Self.loadingUsageMonitorSnapshot
@@ -31,13 +31,13 @@ struct AIPage: View {
 
     static let loadingUsageMonitorSnapshot = UsageMonitorLaunchAgentSnapshot(
         state: .disabled,
-        detail: "Loading...",
+        detail: "加载中…",
         plistPath: ""
     )
 
     static let loadingAutoSwitchSnapshot = CodexAutoSwitchLaunchAgentSnapshot(
         state: .disabled,
-        detail: "Loading...",
+        detail: "加载中…",
         plistPath: ""
     )
 

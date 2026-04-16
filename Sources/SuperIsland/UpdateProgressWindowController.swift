@@ -14,7 +14,7 @@ final class UpdateProgressWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = L10n.shared["update_progress_title"]
+        window.title = AppText.shared["update_progress_title"]
         window.titlebarAppearsTransparent = true
         window.isReleasedWhenClosed = false
         window.level = .floating

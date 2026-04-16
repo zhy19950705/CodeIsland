@@ -543,7 +543,7 @@ enum CodexAutoSwitchLaunchAgentError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .executableMissing:
-            "Missing executable"
+            "缺少可执行文件"
         case let .launchctlFailed(message):
             message
         }
@@ -564,7 +564,7 @@ final class CodexAutoSwitchLaunchAgentManager {
               fileManager.fileExists(atPath: executableURL.path) else {
             return CodexAutoSwitchLaunchAgentSnapshot(
                 state: .unavailable,
-                detail: "SuperIsland executable is unavailable",
+                detail: "SuperIsland 可执行文件不可用",
                 plistPath: plistURL.path
             )
         }
@@ -573,7 +573,7 @@ final class CodexAutoSwitchLaunchAgentManager {
            installedExecutablePath != executableURL.path {
             return CodexAutoSwitchLaunchAgentSnapshot(
                 state: .disabled,
-                detail: "Installed for an older build path; re-enable to repair",
+                detail: "当前安装记录指向旧构建路径，请重新启用以修复",
                 plistPath: plistURL.path,
                 needsRepair: true
             )
@@ -583,7 +583,7 @@ final class CodexAutoSwitchLaunchAgentManager {
             if service.jobState == "spawn failed" {
                 return CodexAutoSwitchLaunchAgentSnapshot(
                     state: .disabled,
-                    detail: "Auto-switch watcher failed to start; re-enable to repair",
+                    detail: "自动切号守护进程启动失败，请重新启用以修复",
                     plistPath: plistURL.path,
                     needsRepair: true
                 )
@@ -591,15 +591,15 @@ final class CodexAutoSwitchLaunchAgentManager {
             if service.isLoaded {
                 return CodexAutoSwitchLaunchAgentSnapshot(
                     state: .enabled,
-                    detail: "Watches Codex quota and switches accounts automatically",
+                    detail: "监控 Codex 额度并自动切换账号",
                     plistPath: plistURL.path
                 )
             }
         }
 
         let detail = fileManager.fileExists(atPath: plistURL.path)
-            ? "Installed but not loaded"
-            : "LaunchAgent not installed"
+            ? "已安装但未加载"
+            : "未安装 LaunchAgent"
         return CodexAutoSwitchLaunchAgentSnapshot(state: .disabled, detail: detail, plistPath: plistURL.path)
     }
 

@@ -60,22 +60,22 @@ struct NotchLiveEditOverlay: View {
 
                 VStack(spacing: 10) {
                     HStack(spacing: 10) {
-                        actionButton(title: "Preset", tint: accent) {
+                        actionButton(title: "预设", tint: accent) {
                             applyPresetWidth()
                         }
-                        actionButton(title: "Reset", tint: .white.opacity(0.9)) {
+                        actionButton(title: "重置", tint: .white.opacity(0.9)) {
                             resetGeometry()
                         }
-                        actionButton(title: "Virtual", tint: accent) {
+                        actionButton(title: "虚拟", tint: accent) {
                             toggleHardwareMode()
                         }
                     }
 
                     HStack(spacing: 12) {
-                        actionButton(title: "Save", tint: accent, filled: true) {
+                        actionButton(title: "保存", tint: accent, filled: true) {
                             onSave()
                         }
-                        actionButton(title: "Cancel", tint: cancelAccent, filled: true) {
+                        actionButton(title: "取消", tint: cancelAccent, filled: true) {
                             onCancel()
                         }
                     }
@@ -192,6 +192,6 @@ struct NotchLiveEditOverlay: View {
     private func readout(width: CGFloat, height: CGFloat, offset: CGFloat) -> String {
         let offsetValue = Int(offset.rounded())
         let offsetText = offsetValue > 0 ? "+\(offsetValue)" : "\(offsetValue)"
-        return "W \(Int(width.rounded()))pt   H \(Int(height.rounded()))pt   X \(offsetText)pt"
+        return "宽 \(Int(width.rounded()))pt   高 \(Int(height.rounded()))pt   偏移 \(offsetText)pt"
     }
 }

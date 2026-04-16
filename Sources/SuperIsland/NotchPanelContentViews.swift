@@ -34,6 +34,13 @@ struct NotchPrimaryBarView: View {
                 CompactRightWing(appState: appState, expanded: shouldShowExpanded, hasNotch: hasNotch)
             }
             .frame(height: notchHeight)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard !shouldShowExpanded else { return }
+                // 给收起态增加显式点击展开兜底，避免悬停监听在启动阶段或系统权限未就绪时
+                // 失效后，用户完全无法展开会话列表。
+                appState.panelCoordinator.openSessionList(reason: .click)
+            }
         } else if showIdleIndicator {
             IdleIndicatorBar(
                 mascotSize: mascotSize,

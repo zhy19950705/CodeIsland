@@ -177,9 +177,9 @@ struct MenuBarPopoverView: View {
         let sessionCount = appState.sessions.count
         if let activeSessionId = appState.activeSessionId,
            let session = appState.sessions[activeSessionId] {
-            return "\(session.sourceLabel) · \(session.projectDisplayName) · \(sessionCount) \(L10n.shared["n_sessions"])"
+            return "\(session.sourceLabel) · \(session.projectDisplayName) · \(sessionCount) \(AppText.shared["n_sessions"])"
         }
-        return "\(sessionCount) \(L10n.shared["n_sessions"])"
+        return "\(sessionCount) \(AppText.shared["n_sessions"])"
     }
 
     private var headerSource: String {

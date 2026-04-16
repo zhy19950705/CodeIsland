@@ -52,7 +52,7 @@ private struct ProjectSessionGroupingStrategy: SessionGroupingStrategy {
 
 private struct StatusSessionGroupingStrategy: SessionGroupingStrategy {
     func makeGroups(allIDs: [String], support: SessionGroupingSupport) -> [SessionListGroupPresentation] {
-        let l10n = L10n.shared
+        let l10n = AppText.shared
         let statusGroups: [(Set<AgentStatus>, String)] = [
             ([.running], l10n["status_running"]),
             ([.waitingApproval, .waitingQuestion], l10n["status_waiting"]),
@@ -115,7 +115,7 @@ private struct CLISessionGroupingStrategy: SessionGroupingStrategy {
             result.append(
                 SessionListGroupPresentation(
                     id: "cli-other",
-                    header: "\(L10n.shared["other"]) (\(remaining.count))",
+                    header: "\(AppText.shared["other"]) (\(remaining.count))",
                     source: nil,
                     ids: remaining
                 )

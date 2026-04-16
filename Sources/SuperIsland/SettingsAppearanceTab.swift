@@ -5,7 +5,7 @@ import SuperIslandCore
 // MARK: - Appearance Page
 
 struct AppearancePage: View {
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
     @AppStorage(SettingsKey.notchWidthOverride) private var notchWidthOverride = SettingsDefaults.notchWidthOverride
     @AppStorage(SettingsKey.maxVisibleSessions) private var maxVisibleSessions = SettingsDefaults.maxVisibleSessions
     @AppStorage(SettingsKey.sessionGroupingMode) private var sessionGroupingMode = SettingsDefaults.sessionGroupingMode
@@ -65,16 +65,16 @@ struct AppearancePage: View {
             }
 
             Section(l10n["panel"]) {
-                Toggle("Force virtual notch", isOn: forceVirtualNotch)
-                Text("Use a movable virtual island even on displays without a physical notch.")
+                Toggle(l10n["force_virtual_notch"], isOn: forceVirtualNotch)
+                Text(l10n["force_virtual_notch_desc"])
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                Button("Live edit notch") {
+                Button(l10n["live_edit_notch"]) {
                     notchStore.enterEditMode()
                     SettingsManager.shared.hardwareNotchMode = HardwareNotchMode(rawValue: hardwareNotchMode) ?? .auto
                 }
-                Text("Adjust width, horizontal position, and virtual notch height directly on the active display.")
+                Text(l10n["live_edit_notch_desc"])
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -83,7 +83,7 @@ struct AppearancePage: View {
                     HStack {
                         Text(l10n["notch_width"])
                         Spacer()
-                        Text("\(Int(currentScreenGeometry.customWidth.rounded())) pt")
+                        Text("\(Int(currentScreenGeometry.customWidth.rounded())) 点")
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
                     }
@@ -125,10 +125,10 @@ struct AppearancePage: View {
 
             Section(l10n["content"]) {
                 Picker(l10n["content_font_size"], selection: $contentFontSize) {
-                    Text("10pt").tag(10)
+                    Text("10 点").tag(10)
                     Text(l10n["11pt_default"]).tag(11)
-                    Text("12pt").tag(12)
-                    Text("13pt").tag(13)
+                    Text("12 点").tag(12)
+                    Text("13 点").tag(13)
                 }
                 Picker(l10n["ai_reply_lines"], selection: $aiMessageLines) {
                     Text(l10n["1_line_default"]).tag(1)
@@ -153,7 +153,7 @@ struct AppearancePage: View {
 
 /// Live preview mimicking a completion-review session card.
 private struct AppearancePreview: View {
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
     let fontSize: Int
     let lineLimit: Int
     let showDetails: Bool
@@ -184,7 +184,7 @@ private struct AppearancePreview: View {
             VStack(alignment: .leading, spacing: 6) {
                 // Header
                 HStack(spacing: 6) {
-                    Text("my-project")
+                    Text("我的项目")
                         .font(.system(size: fs + 2, weight: .bold, design: .monospaced))
                         .foregroundStyle(.white)
                     Spacer()
@@ -194,7 +194,7 @@ private struct AppearancePreview: View {
                         .padding(.horizontal, 6)
                         .padding(.vertical, 3)
                         .background(RoundedRectangle(cornerRadius: 4).fill(Color(red: 0.19, green: 0.58, blue: 0.91).opacity(0.78)))
-                    Text("3m")
+                    Text("3 分钟")
                         .font(.system(size: max(9, fs - 1.5), weight: .medium, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.7))
                         .padding(.horizontal, 6)

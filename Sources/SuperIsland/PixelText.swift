@@ -48,34 +48,51 @@ struct PixelText: View {
 
     var body: some View {
         let chars = Array(text.uppercased())
-        let px = pixelSize
-        let gap: CGFloat = px
+        if supportsAllGlyphs(chars) {
+            let px = pixelSize
+            let gap: CGFloat = px
 
-        Canvas { ctx, size in
-            var xOff: CGFloat = 0
-            for ch in chars {
-                guard let glyph = Self.glyphs[ch] else {
-                    xOff += 3 * px
-                    continue
-                }
-                for row in 0..<Self.H {
-                    for col in 0..<Self.W {
-                        if glyph[row * Self.W + col] == 1 {
-                            let rect = CGRect(x: xOff + CGFloat(col) * px, y: CGFloat(row) * px, width: px, height: px)
-                            ctx.fill(Path(rect), with: .color(color))
+            Canvas { ctx, size in
+                var xOff: CGFloat = 0
+                for ch in chars {
+                    guard let glyph = Self.glyphs[ch] else {
+                        xOff += 3 * px
+                        continue
+                    }
+                    for row in 0..<Self.H {
+                        for col in 0..<Self.W {
+                            if glyph[row * Self.W + col] == 1 {
+                                let rect = CGRect(x: xOff + CGFloat(col) * px, y: CGFloat(row) * px, width: px, height: px)
+                                ctx.fill(Path(rect), with: .color(color))
+                            }
                         }
                     }
+                    xOff += CGFloat(Self.W) * px + gap
                 }
-                xOff += CGFloat(Self.W) * px + gap
             }
+            .frame(width: charWidth(chars.count), height: CGFloat(Self.H) * pixelSize)
+        } else {
+            // Fall back to system text for non-ASCII labels because the custom pixel glyph set only covers latin characters.
+            Text(text)
+                .font(.system(size: fallbackFontSize, weight: .semibold, design: .monospaced))
+                .foregroundStyle(color)
+                .lineLimit(1)
+                .fixedSize()
         }
-        .frame(width: charWidth(chars.count), height: CGFloat(Self.H) * pixelSize)
     }
 
     private func charWidth(_ count: Int) -> CGFloat {
         guard count > 0 else { return 0 }
         let px = pixelSize
         return CGFloat(count) * (CGFloat(Self.W) * px + px) - px
+    }
+
+    private func supportsAllGlyphs(_ chars: [Character]) -> Bool {
+        chars.allSatisfy { Self.glyphs[$0] != nil }
+    }
+
+    private var fallbackFontSize: CGFloat {
+        max(11, pixelSize * 7)
     }
 }
 

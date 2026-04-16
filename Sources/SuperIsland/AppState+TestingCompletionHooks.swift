@@ -98,12 +98,12 @@ extension AppState {
                 cwd: "/tmp/SuperIsland/hook-alpha",
                 source: "claude",
                 model: "claude-sonnet-4-20250514",
-                prompt: "Polish the session list row layout",
-                summary: "Session row chrome was tightened and the primary click target now routes through detail consistently.",
+                prompt: "优化会话列表行布局",
+                summary: "会话行外观已收紧，主点击区域现在会稳定进入详情页。",
                 toolTrail: [
-                    (name: "Read", detail: "Sources/SuperIsland/NotchPanelSessionRowViews.swift"),
-                    (name: "Edit", detail: "Sources/SuperIsland/CompactSessionRow.swift"),
-                    (name: "Bash", detail: "swift test --filter SessionListViewTests"),
+                    (name: "读取", detail: "Sources/SuperIsland/NotchPanelSessionRowViews.swift"),
+                    (name: "编辑", detail: "Sources/SuperIsland/CompactSessionRow.swift"),
+                    (name: "命令", detail: "swift test --filter SessionListViewTests"),
                 ]
             ),
             TestingCompletionSeed(
@@ -111,12 +111,12 @@ extension AppState {
                 cwd: "/tmp/SuperIsland/hook-beta",
                 source: "codex",
                 model: "o3",
-                prompt: "Fix completion detail navigation",
-                summary: "Completion notifications now land on detail and keep queued sessions advancing in order.",
+                prompt: "修复完成态详情跳转",
+                summary: "完成通知现在会进入详情视图，并让排队中的会话按顺序继续推进。",
                 toolTrail: [
-                    (name: "Read", detail: "Sources/SuperIsland/SessionDetailView.swift"),
-                    (name: "Edit", detail: "Sources/SuperIsland/IslandPanelCoordinator.swift"),
-                    (name: "Bash", detail: "swift test --filter PanelWindowControllerTests"),
+                    (name: "读取", detail: "Sources/SuperIsland/SessionDetailView.swift"),
+                    (name: "编辑", detail: "Sources/SuperIsland/IslandPanelCoordinator.swift"),
+                    (name: "命令", detail: "swift test --filter PanelWindowControllerTests"),
                 ]
             ),
             TestingCompletionSeed(
@@ -124,12 +124,12 @@ extension AppState {
                 cwd: "/tmp/SuperIsland/hook-gamma",
                 source: "cursor",
                 model: "gpt-5.4",
-                prompt: "Verify pointer hit regions",
-                summary: "The top-right affordances were rebalanced so status, time, and jump actions no longer overlap.",
+                prompt: "验证指针命中区域",
+                summary: "右上角交互区已重新平衡，状态、时间和跳转按钮不再互相重叠。",
                 toolTrail: [
-                    (name: "Read", detail: "Sources/SuperIsland/NotchPanelSessionListSupport.swift"),
-                    (name: "Edit", detail: "Sources/SuperIsland/NotchPanelSessionActionViews.swift"),
-                    (name: "Bash", detail: "swift test --filter WorkspaceJumpManagerTests"),
+                    (name: "读取", detail: "Sources/SuperIsland/NotchPanelSessionListSupport.swift"),
+                    (name: "编辑", detail: "Sources/SuperIsland/NotchPanelSessionActionViews.swift"),
+                    (name: "命令", detail: "swift test --filter WorkspaceJumpManagerTests"),
                 ]
             ),
         ]

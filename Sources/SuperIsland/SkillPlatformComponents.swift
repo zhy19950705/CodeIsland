@@ -3,7 +3,7 @@ import AppKit
 
 // SkillPlatformComponents groups reusable row and preview views so the page file only owns tab state and filtering.
 struct SkillAgentLinkRow: View {
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
     let snapshot: SkillAgentLinkSnapshot
     let path: String
     let onRevealParent: () -> Void
@@ -89,7 +89,7 @@ struct SkillAgentLinkRow: View {
 }
 
 struct InstalledSkillRow: View {
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
     let skill: InstalledSkill
     let onReveal: () -> Void
     let onPreview: () -> Void
@@ -99,7 +99,9 @@ struct InstalledSkillRow: View {
 
     private var modifiedLabel: String? {
         guard let modifiedAt = skill.modifiedAt else { return nil }
-        return RelativeDateTimeFormatter().localizedString(for: modifiedAt, relativeTo: Date())
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = AppLocale.chinese
+        return formatter.localizedString(for: modifiedAt, relativeTo: Date())
     }
 
     var body: some View {
@@ -245,7 +247,7 @@ struct InstalledSkillRow: View {
 }
 
 struct SkillMarketplaceRow: View {
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
     let item: SkillMarketplaceItem
     let onOpen: () -> Void
     let onPreview: () -> Void
@@ -254,7 +256,9 @@ struct SkillMarketplaceRow: View {
 
     private var updatedLabel: String? {
         guard let updatedAt = item.updatedAt else { return nil }
-        return RelativeDateTimeFormatter().localizedString(for: updatedAt, relativeTo: Date())
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = AppLocale.chinese
+        return formatter.localizedString(for: updatedAt, relativeTo: Date())
     }
 
     private var sourceTitle: String {
@@ -354,7 +358,7 @@ struct SkillMarketplaceRow: View {
                                 ProgressView()
                                     .controlSize(.small)
                             }
-                            Text(isInstalling ? "Installing…" : l10n["install"])
+                            Text(isInstalling ? l10n["installing"] : l10n["install"])
                         }
                     }
                     .buttonStyle(.borderedProminent)

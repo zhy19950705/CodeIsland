@@ -4,7 +4,7 @@ import SuperIslandCore
 
 // HooksPage owns the diagnostics state and actions for hook, editor bridge, and CLI integration management.
 struct HooksPage: View {
-    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var l10n = AppText.shared
     let appState: AppState?
     @State private var cliSnapshots: [CLIIntegrationSnapshot] = []
     @State private var editorSnapshots: [EditorBridgeSnapshot] = []
@@ -182,12 +182,12 @@ struct HooksPage: View {
                 }
             }
 
-            Section("Diagnostics") {
+            Section(l10n["diagnostics"]) {
                 Button {
                     exportDiagnostics()
                 } label: {
                     HStack {
-                        Text("Export diagnostics archive")
+                        Text(l10n["diagnostics_export_archive"])
                         Spacer()
                         if isExportingDiagnostics {
                             ProgressView()
@@ -197,7 +197,7 @@ struct HooksPage: View {
                 }
                 .disabled(isExportingDiagnostics || appState == nil)
 
-                Text("Bundles live session state, hook configs, usage cache, macOS info, and recent SuperIsland logs into a zip archive.")
+                Text(l10n["diagnostics_export_desc"])
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -216,8 +216,8 @@ struct HooksPage: View {
         guard let appState else { return }
 
         let panel = NSSavePanel()
-        panel.title = "Export SuperIsland Diagnostics"
-        panel.nameFieldStringValue = "SuperIsland-Diagnostics.zip"
+        panel.title = l10n["diagnostics_save_title"]
+        panel.nameFieldStringValue = l10n["diagnostics_save_filename"]
         panel.allowedContentTypes = [.zip]
         panel.canCreateDirectories = true
 
@@ -238,8 +238,8 @@ struct HooksPage: View {
                     isExportingDiagnostics = false
                     statusIsError = false
                     statusMessage = result.warnings.isEmpty
-                        ? "Diagnostics exported to \(result.archiveURL.path)"
-                        : "Diagnostics exported with \(result.warnings.count) warning(s): \(result.archiveURL.path)"
+                        ? String(format: l10n["diagnostics_exported_format"], result.archiveURL.path)
+                        : String(format: l10n["diagnostics_exported_with_warnings_format"], result.warnings.count, result.archiveURL.path)
                     NSWorkspace.shared.activateFileViewerSelecting([result.archiveURL])
                 }
             } catch {
